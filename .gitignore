@@ -1,7 +1,12 @@
 # David specific
 pyvista_test.ipynb
-#Data folder, local for each
+#Data folder, local for each.
+# Datasets always live in the repo-root data/ dir and are never committed.
 .data/
+data/
+!data/.gitkeep
+# Guard against a stray data dir created by running notebooks from notebooks/
+notebooks/data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
