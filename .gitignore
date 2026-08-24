@@ -1,3 +1,5 @@
+# David specific
+pyvista_test.ipynb
 #Data folder, local for each
 .data/
 
