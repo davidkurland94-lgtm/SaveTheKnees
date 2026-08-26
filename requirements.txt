@@ -78,6 +78,7 @@ prompt_toolkit==3.0.53
 psutil==7.2.2
 ptyprocess==0.7.0
 pure_eval==0.2.3
+pydicom
 pycparser==3.0
 pydicom==3.0.2
 Pygments==2.21.0
