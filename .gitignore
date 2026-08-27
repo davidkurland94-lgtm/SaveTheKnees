@@ -1,5 +1,3 @@
-# David specific
-pyvista_test.ipynb
 #Data folder, local for each.
 # Datasets always live in the repo-root data/ dir and are never committed.
 .data/
@@ -166,6 +164,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+save-the-knees-env/
 
 # Spyder project settings
 .spyderproject
@@ -230,3 +229,4 @@ __marimo__/
 
 #personal sandbox
 niko_work.txt
+david_not_public
