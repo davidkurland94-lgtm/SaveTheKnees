@@ -33,6 +33,15 @@ state = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state["model"], state["status"] = load_predictor()
+
+    # Warm the graph before serving. TensorFlow traces on the FIRST predict, and
+    # measured in the container that first call costs ~17s against ~0.55s warm.
+    # Paying it here means the startup probe waits instead of a user, and Cloud
+    # Run does not route traffic until /health answers.
+    import numpy as np
+    from functions.sequence_to_tensor import IMG_SIZE, K
+    state["model"].predict(np.zeros((1, K, IMG_SIZE, IMG_SIZE, 1), np.float32), verbose=0)
+
     yield
     state.clear()
 

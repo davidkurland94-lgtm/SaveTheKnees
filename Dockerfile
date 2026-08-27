@@ -34,5 +34,6 @@ RUN useradd --create-home --uid 1000 app && chown -R app:app /app
 USER app
 
 EXPOSE 8080
-# Shell form so Cloud Run's injected $PORT is expanded.
-CMD exec uvicorn api.main:app --host 0.0.0.0 --port ${PORT}
+# JSON form (so signals reach uvicorn) wrapping sh -c (so Cloud Run's injected
+# $PORT is still expanded). exec replaces the shell, keeping uvicorn as PID 1.
+CMD ["sh", "-c", "exec uvicorn api.main:app --host 0.0.0.0 --port ${PORT}"]
