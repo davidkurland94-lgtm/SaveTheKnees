@@ -20,6 +20,8 @@ Typical use:
 
     x = sequence_to_tensor("data/train_series/<study_uid>/<series_uid>")
     x = study_to_tensor(study_uid, series_df, data_root="data", axis="X")
+    # 2.5D: 24 slices as 24 channels
+    x = sequence_to_tensor(series_dir, as_channels=True)      # (224, 224, 24)
 
 Labels are not produced here. They live in data/meta/train_index.csv, one row
 per series, in the twelve "soft_*" columns.
@@ -39,7 +41,7 @@ PCT = (1, 99.5)   # percentile window used for intensity normalisation
 #     no crop     ->  correlation 0.973 - 0.996
 #     crop 130 mm ->  correlation 0.369 - 0.507
 
-CROP_MM = None
+CROP_MM: float | None = None
 AXIS_PLANE = {"X": "Sagittal", "Y": "Coronal", "Z": "Axial"}
 
 
@@ -85,8 +87,11 @@ def raw_slice(ds):
 
 def crop_to_mm(arr, pixel_spacing, crop_mm=CROP_MM):
     """Centre-crop one slice to a constant PHYSICAL size, in millimetres.
-    OFF by default (CROP_MM is None)
+    OFF by default (CROP_MM is None), in which case the slice is returned
+    untouched -- the caller's guard is not the only thing keeping this safe.
     """
+    if crop_mm is None:
+        return arr
     want_r = int(round(crop_mm / float(pixel_spacing[0])))
     want_c = int(round(crop_mm / float(pixel_spacing[1])))
     rows, cols = arr.shape
@@ -125,9 +130,23 @@ def resize_slice(arr, size=IMG_SIZE):
     return (top * (1 - rf) + bottom * rf).astype(np.float32)
 
 
-def sequence_to_tensor(series_dir, k=K, img_size=IMG_SIZE, crop_mm=CROP_MM, pct=PCT):
-    """One folder of .dcm files -> (k, img_size, img_size, 1) float32 in [0, 1].
+def slices_to_channels(x): #fix on format expectation
+    """Sequence layout -> 2.5D layout.
 
+        (k, img_size, img_size, 1)  ->  (img_size, img_size, k)
+
+    Slice i becomes channel i, so channel order IS anatomical order along the
+    plane. Nothing is resampled, rescaled or copied in value terms; this is a
+    transpose plus dropping the length-1 channel axis.
+    """
+    if x is None:
+        return None
+    return np.ascontiguousarray(np.transpose(x[..., 0], (1, 2, 0)))
+
+
+def sequence_to_tensor(series_dir, k=K, img_size=IMG_SIZE, crop_mm=CROP_MM, pct=PCT,
+                       as_channels=False):
+    """
     One channel, not three: the images are monochrome, so three copies would
     only cost 3x the memory.
 
@@ -152,7 +171,8 @@ def sequence_to_tensor(series_dir, k=K, img_size=IMG_SIZE, crop_mm=CROP_MM, pct=
     lo, hi = np.percentile(np.concatenate([a.ravel() for a in cropped]), pct)
     out = np.stack([resize_slice(np.clip(a, lo, hi), img_size) for a in cropped])
     out = (out - lo) / (hi - lo) if hi > lo else np.zeros_like(out)
-    return out[..., None].astype(np.float32)
+    out = out[..., None].astype(np.float32)
+    return slices_to_channels(out) if as_channels else out
 
 
 def pick_series(study_uid, series_df, axis="X"):
@@ -176,6 +196,8 @@ def pick_series(study_uid, series_df, axis="X"):
 
 def study_to_tensor(study_uid, series_df, data_root="data", axis="X", **kwargs):
     """A StudyInstanceUID -> the tensor for one plane ("X" sagittal by default).
+    Extra keywords go straight to sequence_to_tensor, so as_channels=True gives
+    the 2.5D (img_size, img_size, k) layout here too.
     """
     series_uid = pick_series(study_uid, series_df, axis)
     if series_uid is None:
@@ -192,7 +214,13 @@ if __name__ == "__main__":
 
     uid = series_df.StudyInstanceUID.iloc[0]
     x = study_to_tensor(uid, series_df, data_root=root / "data", axis="X")
+    c = study_to_tensor(uid, series_df, data_root=root / "data", axis="X", as_channels=True)
+    if x is None or c is None:
+        raise SystemExit(f"No sagittal series with readable .dcm files for {uid}")
+
     print(f"study_to_tensor  -> {x.shape} {x.dtype} [{x.min():.2f}, {x.max():.2f}]")
+    print(f"  as_channels=True -> {c.shape}   batched for Keras: {(1,) + c.shape}")
+    print(f"  same pixels as the sequence layout: {np.array_equal(slices_to_channels(x), c)}")
 
     for series_uid in series_df.SeriesInstanceUID.head(3):
         study_uid = series_df.loc[series_df.SeriesInstanceUID == series_uid,
@@ -200,4 +228,4 @@ if __name__ == "__main__":
         d = root / "data" / "train_series" / study_uid / series_uid
         n = len(list(d.glob("*.dcm")))
         t = sequence_to_tensor(d)
-        print(f"  {n:>3} images -> {t.shape}")
+        print(f"  {n:>3} images -> {'(unreadable)' if t is None else t.shape}")
