@@ -43,7 +43,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from functions.sequence_to_tensor import pick_series, sequence_to_tensor
+from functions.sequence_to_tensor import pick_series, ranked_series, sequence_to_tensor
 
 
 def load_study(study_uid, series_df, images_root, axis="X", as_channels=False):
@@ -57,15 +57,17 @@ def load_study(study_uid, series_df, images_root, axis="X", as_channels=False):
     Returns:
         float32 array in [0, 1], (K, H, W, 1) or (H, W, K), or None.
     """
-    series_uid = pick_series(study_uid, series_df, axis)
-    if series_uid is None:
-        return None
-
-    series_dir = Path(images_root) / study_uid / series_uid
-    if not series_dir.is_dir():
-        return None
-
-    return sequence_to_tensor(series_dir, as_channels=as_channels)
+    for series_uid in ranked_series(study_uid, series_df, axis):
+        series_dir = Path(images_root) / study_uid / series_uid
+        if not series_dir.is_dir():
+            continue
+        try:
+            x = sequence_to_tensor(series_dir, as_channels=as_channels)
+        except Exception:
+            continue
+        if x is not None:
+            return x
+    return None
 
 
 def cache_path(study_uid, cache_dir, axis="X"):
@@ -93,19 +95,32 @@ def build_cache(index, series_df, images_root, cache_dir, axis="X", verbose=True
     """
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
 
-    ok = []
+    ok, skipped = [], []
     for n, study_uid in enumerate(index.StudyInstanceUID, start=1):
         out = cache_path(study_uid, cache_dir, axis)
 
         if not out.exists():
-            x = load_study(study_uid, series_df, images_root, axis)   # float32 in [0, 1]
+            try:
+                x = load_study(study_uid, series_df, images_root, axis)   # float32 in [0, 1]
+            except Exception as error:
+                skipped.append(study_uid)
+                if verbose:
+                    print(f"SKIPPED {study_uid} ({axis}): {error}", flush=True)
+                continue
             if x is None:
+                skipped.append(study_uid)
                 continue
             np.save(out, (x * 255).round().astype("uint8"))
 
         ok.append(study_uid)
         if verbose and n % 250 == 0:
             print(f"cached {n}/{len(index)} studies")
+    if skipped and verbose:
+        rate = len(skipped) / max(len(index), 1)
+        print(f"{'WARNING: ' if rate > 0.01 else ''}"
+              f"{len(skipped)}/{len(index)} studies skipped on axis {axis}"
+              f"{' -- above 1%, check the pipeline before trusting this cache' if rate > 0.01 else ''}",
+              flush=True)
 
     return ok
 

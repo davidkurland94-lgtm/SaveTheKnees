@@ -106,6 +106,38 @@ def classification_head(features, n_labels):
     return layers.Dense(n_labels, activation="sigmoid")(net)
 
 
+def _encode_3d(inputs):
+    """The 3-block Conv3D stack shared by the single- and multi-plane models:
+    (K, H, W, 1) -> (64,) pooled features. Fresh layers per call, so each plane
+    in the multi-plane model learns its own filters -- sagittal anatomy and
+    axial anatomy do not look alike."""
+    net = layers.Conv3D(32, 3, padding="same", activation="relu")(inputs)
+    net = layers.MaxPooling3D(pool_size=(1, 2, 2), padding="same")(net)
+    net = layers.Conv3D(64, 3, padding="same", activation="relu")(net)
+    net = layers.MaxPooling3D(pool_size=(2, 2, 2), padding="same")(net)
+    net = layers.Conv3D(64, 3, padding="same", activation="relu")(net)
+    net = layers.MaxPooling3D(pool_size=(2, 2, 2), padding="same")(net)
+    return layers.GlobalAveragePooling3D()(net)
+
+
+def build_model_multiplane(input_shape, n_labels=len(LABELS)):
+    """Three volumes of ONE study -- sagittal, coronal, axial -- one prediction.
+
+    Every study in the dataset has all three planes (verified: 4,407/4,407),
+    so each training step reads the same knee from three directions and the
+    head learns from the fused 192 features. This is the fusion upgrade of the
+    per-plane-ensemble idea: instead of averaging three opinions after the
+    fact, the planes inform each other during training.
+
+    input_shape is ONE plane's per-sample shape, (K, H, W, 1); all three share it.
+    """
+    plane_inputs = [layers.Input(shape=input_shape, name=f"plane_{name}")
+                    for name in ("sagittal", "coronal", "axial")]
+    fused = layers.Concatenate()([_encode_3d(inp) for inp in plane_inputs])
+    return models.Model(inputs=plane_inputs,
+                        outputs=classification_head(fused, n_labels))
+
+
 def build_model(input_shape, n_labels=len(LABELS)):
     """One sample's shape -> a compile-ready model.
 

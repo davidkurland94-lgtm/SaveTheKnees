@@ -59,8 +59,80 @@ from functions.sequence_to_tensor import IMG_SIZE, K
 from functions.tensor_cache import load_cached
 
 
+def make_augmenter(as_channels):
+    """Label-safe augmentation for one sample, same transform on every slice.
+
+    Deliberately conservative for knee MRI:
+      - pad-reflect + random crop  = small in-plane translation
+      - one brightness/contrast draw per VOLUME (per-slice draws would destroy
+        the stack coherence sequence_to_tensor works to preserve)
+      - light gaussian noise
+    Deliberately ABSENT: slice-order reversal and horizontal flips -- both mirror
+    medial<->lateral anatomy, which silently swaps the Medial/Lateral labels.
+    """
+    import tensorflow as tf  # local so the module import stays light
+
+    pad = 12
+    if as_channels:            # (H, W, K)
+        paddings = [[pad, pad], [pad, pad], [0, 0]]
+        crop_size = [IMG_SIZE, IMG_SIZE, K]
+    else:                      # (K, H, W, 1)
+        paddings = [[0, 0], [pad, pad], [pad, pad], [0, 0]]
+        crop_size = [K, IMG_SIZE, IMG_SIZE, 1]
+
+    def augment(x, y):
+        x = tf.pad(x, paddings, mode="REFLECT")
+        x = tf.image.random_crop(x, size=crop_size)
+        scale = tf.random.uniform([], 0.9, 1.1)
+        shift = tf.random.uniform([], -0.05, 0.05)
+        x = x * scale + shift
+        x = x + tf.random.normal(tf.shape(x), stddev=0.01)
+        return tf.clip_by_value(x, 0.0, 1.0), y
+
+    return augment
+
+
+def make_multiplane_dataset(uids, labels, cache_dir, batch_size=4,
+                            shuffle=False, augment=False):
+    """Like make_dataset, but each sample is (sagittal, coronal, axial) of one
+    study -- the input triple build_model_multiplane expects. Only pass uids
+    cached for ALL THREE axes; tensor_cache.cached_subset per axis, intersected,
+    is what guarantees that."""
+    import functools
+
+    uids = np.asarray(uids)
+    labels = np.asarray(labels, dtype="float32")
+    if len(uids) != len(labels):
+        raise ValueError(f"{len(uids)} studies but {len(labels)} label rows")
+    shape = (K, IMG_SIZE, IMG_SIZE, 1)
+
+    def read(uid, y):
+        planes = tuple(
+            tf.numpy_function(
+                functools.partial(
+                    lambda u, a: load_cached(u.decode(), cache_dir, a), a=axis),
+                [uid], tf.float32)
+            for axis in ("X", "Y", "Z"))
+        for x in planes:
+            x.set_shape(shape)
+        y.set_shape((len(LABELS),))
+        return planes, y
+
+    ds = tf.data.Dataset.from_tensor_slices((uids, labels))
+    if shuffle:
+        ds = ds.shuffle(len(uids), reshuffle_each_iteration=True)
+    ds = ds.map(read, num_parallel_calls=tf.data.AUTOTUNE)
+    if augment:
+        one = make_augmenter(as_channels=False)
+        def augment_all(planes, y):
+            out = tuple(one(x, y)[0] for x in planes)   # independent draws per plane
+            return out, y
+        ds = ds.map(augment_all, num_parallel_calls=tf.data.AUTOTUNE)
+    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+
 def make_dataset(uids, labels, cache_dir, batch_size=8, shuffle=False,
-                 axis="X", as_channels=False):
+                 axis="X", as_channels=False, augment=False):
     """(study UIDs, label array) -> a batched tf.data.Dataset reading the cache.
 
     uids and labels must be row-aligned: labels[i] belongs to uids[i]. That is
@@ -106,6 +178,7 @@ def make_dataset(uids, labels, cache_dir, batch_size=8, shuffle=False,
     if shuffle:
         ds = ds.shuffle(len(uids), reshuffle_each_iteration=True)   # UIDs, not tensors
 
-    return (ds.map(read, num_parallel_calls=tf.data.AUTOTUNE)
-              .batch(batch_size)
-              .prefetch(tf.data.AUTOTUNE))
+    ds = ds.map(read, num_parallel_calls=tf.data.AUTOTUNE)
+    if augment:
+        ds = ds.map(make_augmenter(as_channels), num_parallel_calls=tf.data.AUTOTUNE)
+    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)

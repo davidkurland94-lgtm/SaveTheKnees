@@ -175,6 +175,17 @@ def sequence_to_tensor(series_dir, k=K, img_size=IMG_SIZE, crop_mm=CROP_MM, pct=
     return slices_to_channels(out) if as_channels else out
 
 
+def ranked_series(study_uid, series_df, axis="X"):
+    """ALL of a study's series for one plane, best first (fluid-sensitive wins,
+    UID breaks ties). pick_series takes the first; callers that must survive a
+    corrupt file walk the list until one decodes."""
+    rows = series_df[(series_df.StudyInstanceUID == study_uid)
+                     & (series_df.Anatomical_Plane == AXIS_PLANE[axis])]
+    rows = rows.sort_values(["Fluid_Sensitive", "SeriesInstanceUID"],
+                            ascending=[False, True])
+    return list(rows.SeriesInstanceUID)
+
+
 def pick_series(study_uid, series_df, axis="X"):
     """Choose ONE series of a study for the given axis.
 

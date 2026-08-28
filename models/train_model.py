@@ -62,10 +62,10 @@ import tensorflow as tf
 from tensorflow.keras import callbacks as keras_callbacks
 
 from functions import paths
-from functions.datasets import make_dataset
+from functions.datasets import make_dataset, make_multiplane_dataset
 from functions.labels import LABELS, derived_labels, gold_labels
 from functions.tensor_cache import build_cache, cached_subset
-from models.architectures import build_model, compile_model
+from models.architectures import build_model, build_model_multiplane, compile_model
 
 log = logging.getLogger("train")
 
@@ -160,23 +160,44 @@ def run(args):
 
     # 3. Decode once. Re-running is cheap: anything already cached is skipped.
     #    cached_subset is what keeps the label rows aligned with the cache.
-    gold = cached_subset(
-        gold, build_cache(gold, series_df, args.gold_images, args.cache))
-    train_index = cached_subset(
-        train_index, build_cache(train_index, series_df, args.train_images, args.cache))
-    log.info("%d train and %d gold studies cached", len(train_index), len(gold))
+    axes = ("X", "Y", "Z") if args.multi_plane else (args.axis,)
+    gold_ok, train_ok = None, None
+    for axis in axes:
+        g = set(build_cache(gold, series_df, args.gold_images, args.cache, axis=axis))
+        t = set(build_cache(train_index, series_df, args.train_images, args.cache, axis=axis))
+        gold_ok = g if gold_ok is None else gold_ok & g
+        train_ok = t if train_ok is None else train_ok & t
+    gold = cached_subset(gold, sorted(gold_ok))
+    train_index = cached_subset(train_index, sorted(train_ok))
+    log.info("%d train and %d gold studies cached on %s", len(train_index), len(gold), axes)
 
     # 4. Stream.
-    train_ds = make_dataset(train_index.StudyInstanceUID, train_index[LABELS],
-                            args.cache, batch_size=args.batch_size, shuffle=True,
-                            as_channels=args.as_channels)
-    gold_ds = make_dataset(gold.StudyInstanceUID, gold[LABELS], args.cache,
-                           batch_size=args.batch_size, as_channels=args.as_channels)
+    if args.multi_plane:
+        train_ds = make_multiplane_dataset(train_index.StudyInstanceUID,
+                                           train_index[LABELS], args.cache,
+                                           batch_size=args.batch_size, shuffle=True,
+                                           augment=args.augment)
+        gold_ds = make_multiplane_dataset(gold.StudyInstanceUID, gold[LABELS],
+                                          args.cache, batch_size=args.batch_size)
+    else:
+        train_ds = make_dataset(train_index.StudyInstanceUID, train_index[LABELS],
+                                args.cache, batch_size=args.batch_size, shuffle=True,
+                                axis=args.axis, as_channels=args.as_channels,
+                                augment=args.augment)
+        gold_ds = make_dataset(gold.StudyInstanceUID, gold[LABELS], args.cache,
+                               batch_size=args.batch_size, axis=args.axis,
+                               as_channels=args.as_channels)
 
-    # 5. The per-sample shape comes off the data, never hardcoded.
-    one_sample = next(iter(train_ds))[0].shape[1:]
-    log.info("one sample %s", one_sample)
-    model = compile_model(build_model(one_sample))
+    # 5. The per-sample shape comes off the data, never hardcoded (the
+    #    multi-plane model's three inputs share one per-plane shape).
+    if args.multi_plane:
+        one_sample = next(iter(train_ds))[0][0].shape[1:]
+        log.info("one sample %s x 3 planes", one_sample)
+        model = compile_model(build_model_multiplane(one_sample))
+    else:
+        one_sample = next(iter(train_ds))[0].shape[1:]
+        log.info("one sample %s", one_sample)
+        model = compile_model(build_model(one_sample))
     model.summary(print_fn=log.info)
 
     # 6. Fit.
@@ -215,6 +236,13 @@ def parse_args(argv=None):
     model = p.add_argument_group("model")
     model.add_argument("--as-channels", action="store_true",
                        help="2.5D layout (H, W, K) -> Conv2D; default is 3D (K, H, W, 1)")
+    model.add_argument("--axis", default="X", choices=["X", "Y", "Z"],
+                       help="X sagittal, Y coronal, Z axial; each axis has its own cache")
+    model.add_argument("--multi-plane", action="store_true",
+                       help="one model reading sagittal+coronal+axial per study "
+                            "(needs all three axis caches; overrides --axis)")
+    model.add_argument("--augment", action="store_true",
+                       help="crop-shift + intensity jitter on the training split only")
 
     train = p.add_argument_group("training")
     train.add_argument("--epochs", type=int, default=10)
