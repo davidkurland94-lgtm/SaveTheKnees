@@ -2,6 +2,8 @@
 # Datasets always live in the repo-root data/ dir and are never committed.
 .data/
 data/
+data/tensor_cache/
+*.keras
 !data/.gitkeep
 # Guard against a stray data dir created by running notebooks from notebooks/
 notebooks/data/
