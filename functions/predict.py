@@ -76,6 +76,37 @@ def predict_series(model, series_dir):
     return predict_tensor(model, x)
 
 
+# ---------------------------------------------------------------------------
+# Notebook convenience -- the one-liner for models_pipe.ipynb
+# ---------------------------------------------------------------------------
+
+_loaded = None
+
+
+def predict_study(study_uid, axis="X", data_root=None):
+    """StudyInstanceUID -> {label: probability} via the checkpointed image
+    model. Loads the model and the series table once, on first call.
+
+    Serving-consistent by construction: picks the same series pick_series
+    picks, builds the tensor with sequence_to_tensor.
+    """
+    global _loaded
+    import pandas as pd
+    from functions.sequence_to_tensor import study_to_tensor
+
+    data_root = Path(data_root) if data_root else REPO_ROOT / "data"
+    if _loaded is None:
+        model, status = load_predictor()
+        series_df = pd.read_csv(data_root / "train_series.csv")
+        _loaded = (model, status, series_df)
+    model, status, series_df = _loaded
+
+    x = study_to_tensor(study_uid, series_df, data_root=data_root, axis=axis)
+    if x is None:
+        return None
+    return {"model_status": status, **predict_tensor(model, x)}
+
+
 if __name__ == "__main__":
     import pandas as pd
 

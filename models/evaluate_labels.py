@@ -59,6 +59,20 @@ def compare(reader_tables, gold=None):
     return out
 
 
+def report_model_vs_llm():
+    """The models_pipe.ipynb one-liner: the trained report model, Kevin's rule
+    baseline, and every LLM reader, side by side on the 58 gold studies."""
+    gold = gold_labels(paths.TRAIN_CSV)
+    readers = {name: pd.read_csv(path)
+               for name, path in KNOWN_READERS.items() if path.exists()}
+    for name, fname in [("report_model", "report_model_gold.csv"),
+                        ("kevin_rules", "kevin_rules_gold.csv")]:
+        path = paths.DATA / "meta" / fname
+        if path.exists():
+            readers[name] = pd.read_csv(path)
+    return compare(readers, gold).round(3)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Score label tables against the 58 gold studies",
