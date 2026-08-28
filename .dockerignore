@@ -1,0 +1,20 @@
+# The build context must stay small. data/ alone is 17 GB and the venvs are
+# multi-GB -- without this, every `docker build` ships them to the daemon.
+data/
+save-the-knees-env/
+.venv/
+.git/
+notebooks/
+Docs/
+Aux_functions/
+
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+requirements-dev.txt
+*.md
+.DS_Store

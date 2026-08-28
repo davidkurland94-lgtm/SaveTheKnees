@@ -214,10 +214,8 @@ if __name__ == "__main__":
 
     uid = series_df.StudyInstanceUID.iloc[0]
     x = study_to_tensor(uid, series_df, data_root=root / "data", axis="X")
-    c = study_to_tensor(uid, series_df, data_root=root / "data", axis="X", as_channels=True)
-    if x is None or c is None:
+    if x is None:
         raise SystemExit(f"No sagittal series with readable .dcm files for {uid}")
-
     print(f"study_to_tensor  -> {x.shape} {x.dtype} [{x.min():.2f}, {x.max():.2f}]")
     print(f"  as_channels=True -> {c.shape}   batched for Keras: {(1,) + c.shape}")
     print(f"  same pixels as the sequence layout: {np.array_equal(slices_to_channels(x), c)}")

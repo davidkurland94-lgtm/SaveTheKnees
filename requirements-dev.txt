@@ -1,0 +1,11 @@
+# Local development: notebooks, plots, linting.
+# Installs the runtime deps too, so one command sets up a working env:
+#     pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+jupyterlab==4.6.3
+ipykernel==7.3.0
+matplotlib==3.10.9
+
+pylint==4.0.7

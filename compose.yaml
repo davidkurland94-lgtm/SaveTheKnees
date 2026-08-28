@@ -1,0 +1,23 @@
+services:
+  # The serving container -- same image that goes to Artifact Registry.
+  api:
+    build: .
+    ports: ["8000:8080"]
+    environment:
+      ALLOW_LOCAL_PATHS: "1"        # local dev only; never set this on Cloud Run
+    volumes:
+      - ./models:/app/models:ro     # swap in trained weights without rebuilding
+      - ./data:/app/data:ro         # so /predict/path can reach local series
+
+  # Local GPU training. Needs Docker Desktop WSL integration enabled.
+  # Blackwell (RTX 5080, sm_120) is why this uses the NGC image rather than a
+  # pip TensorFlow wheel.
+  train:
+    image: nvcr.io/nvidia/tensorflow:25.10-tf2-py3
+    gpus: all
+    working_dir: /app
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    command: python -m functions.train
+    profiles: ["training"]          # docker compose --profile training up train
