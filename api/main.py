@@ -20,7 +20,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from api.studies import router as studies_router
-from functions.model import LABELS
+from functions.labels import LABELS
 from functions.predict import load_predictor, predict_series
 
 # Reading a server-side path is handy in local dev and a liability on a public
@@ -34,13 +34,10 @@ state = {}
 async def lifespan(app: FastAPI):
     state["model"], state["status"] = load_predictor()
 
-    # Warm the graph before serving. TensorFlow traces on the FIRST predict, and
-    # measured in the container that first call costs ~17s against ~0.55s warm.
-    # Paying it here means the startup probe waits instead of a user, and Cloud
-    # Run does not route traffic until /health answers.
+
     import numpy as np
-    from functions.sequence_to_tensor import IMG_SIZE, K
-    state["model"].predict(np.zeros((1, K, IMG_SIZE, IMG_SIZE, 1), np.float32), verbose=0)
+    state["model"].predict(
+        np.zeros((1, *state["model"].input_shape[1:]), np.float32), verbose=0)
 
     yield
     state.clear()

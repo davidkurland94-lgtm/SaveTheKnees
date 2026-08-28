@@ -19,15 +19,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Bake the ImageNet weights into the image. Otherwise the first request after
-# every cold start pays a ~95 MB download.
-RUN python -c "from keras.applications import ResNet50; ResNet50(weights='imagenet', include_top=False)" \
-    && chmod -R a+rX /opt/keras
-
 COPY functions/ functions/
 COPY api/ api/
-# Trained weights when they exist; just .gitkeep otherwise. The predictor
-# falls back to untrained and says so in every response.
 COPY models/ models/
 
 RUN useradd --create-home --uid 1000 app && chown -R app:app /app

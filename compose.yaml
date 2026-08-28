@@ -19,5 +19,9 @@ services:
     volumes:
       - .:/app
       - ./data:/app/data
-    command: python -m functions.train
+    command: >
+      python -m models.train_model
+      --gold-images data/train_series
+      --derived-labels data/meta/rsna-knee-llm-report-labels/llm_labels_v4_blend.csv
+      --checkpoint models/knee_findings.keras
     profiles: ["training"]          # docker compose --profile training up train

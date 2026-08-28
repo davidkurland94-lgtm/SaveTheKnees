@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 
 from functions import catalog
 from functions.catalog import DataUnavailable
-from functions.model import LABELS
+from functions.labels import LABELS
 from functions.sequence_to_tensor import AXIS_PLANE, sequence_to_tensor
 
 router = APIRouter(prefix="/studies", tags=["dataset"])

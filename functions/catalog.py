@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from functions.model import LABELS
+from functions.labels import LABELS
 from functions.sequence_to_tensor import AXIS_PLANE
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

@@ -46,6 +46,55 @@ from tensorflow.keras import layers, models
 
 from functions.labels import LABELS
 
+# The derived labels are SOFT -- floats like 0.08 and 0.94, never 0 or 1 (see
+# labels.derived_labels, which deliberately does not round them). The loss is
+# fine with that; the stock Keras metrics are not, and they fail in the worst
+# possible way -- silently, with numbers that look meaningful:
+#
+#     stock metric on soft targets     auc=0.000  accuracy=0.000  precision=1.000
+#     same predictions, binarized      auc=1.000  accuracy=0.998  precision=0.998
+#
+# AUC and BinaryAccuracy compare y_true against thresholds it never hits, so
+# they report zero. Precision/Recall cast y_true to bool, and every soft value
+# is nonzero, so every target counts as positive: precision pins to 1.000 and
+# looks perfect. None of it raises.
+#
+# The gold validation labels ARE 0/1, so val_auc -- which EarlyStopping,
+# ModelCheckpoint and ReduceLROnPlateau all watch -- was never broken. Only the
+# train-side numbers lied. These wrappers binarize y_true inside the metric, so
+# the progress bar tells the truth while the loss keeps the soft targets, where
+# the gradient information lives. On 0/1 targets binarizing is the identity, so
+# validation numbers are unchanged.
+LABEL_THRESHOLD = 0.5
+
+
+def _hard(y_true, y_pred):
+    return tf.cast(y_true > LABEL_THRESHOLD, y_pred.dtype)
+
+
+@tf.keras.saving.register_keras_serializable(package="stk")
+class SoftAUC(tf.keras.metrics.AUC):
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
+
+
+@tf.keras.saving.register_keras_serializable(package="stk")
+class SoftBinaryAccuracy(tf.keras.metrics.BinaryAccuracy):
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
+
+
+@tf.keras.saving.register_keras_serializable(package="stk")
+class SoftRecall(tf.keras.metrics.Recall):
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
+
+
+@tf.keras.saving.register_keras_serializable(package="stk")
+class SoftPrecision(tf.keras.metrics.Precision):
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
+
 
 def build_model_3d(input_shape, n_labels):
     """rank 4 (K, H, W, 1) -> a 3D CNN.
@@ -145,15 +194,20 @@ def compile_model(model):
     binary_crossentropy, not categorical: it scores each of the 12 sigmoid outputs
     on its own, which is what "several findings at once" needs. It also takes soft
     targets (floats in [0, 1]) unchanged, which is what the derived labels are.
+
+    The metrics are the Soft* wrappers above, not the stock classes, because the
+    training targets are soft -- see the comment block at LABEL_THRESHOLD. The
+    names ("auc" etc.) are load-bearing: train_model's callbacks monitor
+    "val_auc" by that exact string.
     """
     model.compile(
         optimizer="adam",
         loss="binary_crossentropy",
         metrics=[
-            "accuracy",
-            tf.keras.metrics.AUC(name="auc"),
-            tf.keras.metrics.Recall(name="recall"),
-            tf.keras.metrics.Precision(name="precision"),
+            SoftBinaryAccuracy(name="accuracy"),
+            SoftAUC(name="auc"),
+            SoftRecall(name="recall"),
+            SoftPrecision(name="precision"),
         ],
     )
     return model

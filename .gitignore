@@ -233,7 +233,3 @@ __marimo__/
 #personal sandbox
 niko_work.txt
 david_not_public
-
-# Trained weights: too big for git, and rebuilt from data anyway.
-models/*
-!models/.gitkeep
