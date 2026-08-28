@@ -2,12 +2,14 @@ services:
   # The serving container -- same image that goes to Artifact Registry.
   api:
     build: .
+    image: stk-api:latest           # reuse the locally built tag instead of a second build
     ports: ["8000:8080"]
+    restart: unless-stopped         # local deployment: survives reboots until compose down
     environment:
       ALLOW_LOCAL_PATHS: "1"        # local dev only; never set this on Cloud Run
     volumes:
       - ./models:/app/models:ro     # swap in trained weights without rebuilding
-      - ./data:/app/data:ro         # so /predict/path can reach local series
+      - ./data:/app/data:ro         # so /predict/path and /studies/* reach local data
 
   # Local GPU training. Needs Docker Desktop WSL integration enabled.
   # Blackwell (RTX 5080, sm_120) is why this uses the NGC image rather than a
