@@ -13,15 +13,16 @@ services:
   # Blackwell (RTX 5080, sm_120) is why this uses the NGC image rather than a
   # pip TensorFlow wheel.
   train:
-    image: nvcr.io/nvidia/tensorflow:25.10-tf2-py3
+    image: nvcr.io/nvidia/tensorflow:25.02-tf2-py3
     gpus: all
     working_dir: /app
     volumes:
       - .:/app
       - ./data:/app/data
     command: >
-      python -m models.train_model
+      bash -c "pip install --no-cache-dir -q pydicom pandas
+      && python -m models.train_model
       --gold-images data/train_series
       --derived-labels data/meta/rsna-knee-llm-report-labels/llm_labels_v4_blend.csv
-      --checkpoint models/knee_findings.keras
+      --checkpoint models/knee_findings.keras"
     profiles: ["training"]          # docker compose --profile training up train

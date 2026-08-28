@@ -2,8 +2,7 @@
 FastAPI wrapper around functions.predict.
 
 The model is loaded ONCE at startup, not per request. On Cloud Run a per-request
-load would add seconds to every call and re-download ImageNet weights on every
-cold start.
+load would add seconds of graph-building to every call.
 
 Run locally:
     uvicorn api.main:app --reload --port 8000

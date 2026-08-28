@@ -1,96 +1,33 @@
-"""What the network looks like, and how it learns.
-
-PIPELINE POSITION
-    Step 4 of 5. Takes the per-sample shape read off a dataset from
-    `functions/datasets.py`, and returns a model for `train_model.py` to fit.
-
-        labels.py  ->  tensor_cache.py  ->  datasets.py  ->  ARCHITECTURES.PY
-                                                          -> train_model.py
-
-WHEN TO USE IT
-    Whenever a model object is needed - training, evaluation, or loading weights
-    for inference. Pure Keras: no file I/O, no paths, no data. You can import it
-    and call `build_model((24, 224, 224, 1)).summary()` with nothing on disk,
-    which makes it the cheapest part of the pipeline to inspect and to test.
-
-CALL ORDER
-    build_model(input_shape)  ->  compile_model(model)  ->  fit
-
-    Kept as separate calls on purpose. A single function that builds, compiles
-    and fits cannot train more epochs, resume later, or train a model loaded
-    from a file - calling it twice throws the first model away and starts over.
-
-CHOOSING THE ARCHITECTURE
-    The layout decides the convolution, and `build_model` picks by reading the
-    rank of one sample. You never name the architecture directly; you choose the
-    data layout (`as_channels` in `make_dataset`) and this follows.
-
-        rank 4 (K, H, W, 1) -> a 3D CNN. The slices are a depth axis the kernels
-            move through, so the model can see across slices.
-        rank 3 (H, W, K)    -> a 2.5D CNN. The slices are channels, so every
-            kernel already sees all 24 at once but the model has no notion of
-            slice order. Far cheaper to train, which is the trade.
-
-TWO THINGS THAT WERE IN THE FIRST DRAFT AND ARE DELIBERATELY GONE
-    TimeDistributed is dropped. It exists to apply a layer at every step of a
-    TIME axis, and there is no time axis here. Wrapped around the pooling it made
-    Keras read the 24 slices as time and hand a rank-4 slice to a 3D pool; wrapped
-    around the last Dense it produced (B, T, 12) against labels of (B, 12).
-
-    The duplicated Dense(20) is chained, not parallel. Both lines read
-    `shared_feature`, so the second overwrote the first and one layer was
-    silently dropped. See `classification_head`.
-"""
 import tensorflow as tf
 from tensorflow.keras import layers, models
 
 from functions.labels import LABELS
 
-# The derived labels are SOFT -- floats like 0.08 and 0.94, never 0 or 1 (see
-# labels.derived_labels, which deliberately does not round them). The loss is
-# fine with that; the stock Keras metrics are not, and they fail in the worst
-# possible way -- silently, with numbers that look meaningful:
-#
-#     stock metric on soft targets     auc=0.000  accuracy=0.000  precision=1.000
-#     same predictions, binarized      auc=1.000  accuracy=0.998  precision=0.998
-#
-# AUC and BinaryAccuracy compare y_true against thresholds it never hits, so
-# they report zero. Precision/Recall cast y_true to bool, and every soft value
-# is nonzero, so every target counts as positive: precision pins to 1.000 and
-# looks perfect. None of it raises.
-#
-# The gold validation labels ARE 0/1, so val_auc -- which EarlyStopping,
-# ModelCheckpoint and ReduceLROnPlateau all watch -- was never broken. Only the
-# train-side numbers lied. These wrappers binarize y_true inside the metric, so
-# the progress bar tells the truth while the loss keeps the soft targets, where
-# the gradient information lives. On 0/1 targets binarizing is the identity, so
-# validation numbers are unchanged.
 LABEL_THRESHOLD = 0.5
-
 
 def _hard(y_true, y_pred):
     return tf.cast(y_true > LABEL_THRESHOLD, y_pred.dtype)
 
 
-@tf.keras.saving.register_keras_serializable(package="stk")
+@tf.keras.utils.register_keras_serializable(package="stk")
 class SoftAUC(tf.keras.metrics.AUC):
     def update_state(self, y_true, y_pred, sample_weight=None):
         return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
 
 
-@tf.keras.saving.register_keras_serializable(package="stk")
+@tf.keras.utils.register_keras_serializable(package="stk")
 class SoftBinaryAccuracy(tf.keras.metrics.BinaryAccuracy):
     def update_state(self, y_true, y_pred, sample_weight=None):
         return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
 
 
-@tf.keras.saving.register_keras_serializable(package="stk")
+@tf.keras.utils.register_keras_serializable(package="stk")
 class SoftRecall(tf.keras.metrics.Recall):
     def update_state(self, y_true, y_pred, sample_weight=None):
         return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
 
 
-@tf.keras.saving.register_keras_serializable(package="stk")
+@tf.keras.utils.register_keras_serializable(package="stk")
 class SoftPrecision(tf.keras.metrics.Precision):
     def update_state(self, y_true, y_pred, sample_weight=None):
         return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
