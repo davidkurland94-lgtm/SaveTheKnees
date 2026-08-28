@@ -1,9 +1,9 @@
 """
 dicom_3d.py — build and render a 3D volume from a knee MRI series.
 
-Depends on dicom_utils.py being importable (same folder / sys.path).
-Install requirements (on top of dicom_utils.py's requirements):
-    pip install scikit-image plotly --break-system-packages
+Imports functions.dicom_utils (the consolidated DICOM helpers), so run from
+the repo root. Extra deps beyond requirements.txt: see requirements-dev.txt
+(plotly, scipy, scikit-image).
 
 Rendering note: plot_3d_volume writes a standalone .html file by default
 rather than displaying inline. A marching-cubes mesh serializes to tens of
@@ -21,7 +21,7 @@ from scipy import ndimage as ndi
 from skimage import measure, morphology
 import plotly.graph_objects as go
 
-from dicom_utils3 import (
+from functions.dicom_utils import (
     iter_patient_studies,
     get_study_series_summary,
     load_series,

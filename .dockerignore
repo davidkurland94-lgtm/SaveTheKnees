@@ -6,7 +6,6 @@ save-the-knees-env/
 .git/
 notebooks/
 Docs/
-Aux_functions/
 
 **/__pycache__/
 *.py[cod]
