@@ -67,15 +67,51 @@ def build_model(k=K, img_size=IMG_SIZE, labels=LABELS,
     return keras.Model(inputs, outputs, name="knee_resnet50")
 
 
+# The training targets are the soft_* columns: continuous values like 0.25 and
+# 0.96, never 0 or 1. Keras' AUC and BinaryAccuracy both assume y_true is
+# binary and return exactly 0.000 on soft targets -- measured, on predictions
+# that score auc 1.000 and acc 0.992 once the targets are binarized. Zero, not
+# an error, which is what makes it dangerous: monitor="val_auc" would watch a
+# flat line and EarlyStopping, save_best_only and ReduceLROnPlateau would all
+# be driven by noise.
+#
+# Binarizing y_true INSIDE the metric keeps the soft targets for the loss
+# (where the gradient information lives) while the metrics report against the
+# label the soft value stands for.
+LABEL_THRESHOLD = 0.5
+
+
+@keras.saving.register_keras_serializable(package="stk")
+class SoftAUC(keras.metrics.AUC):
+    """AUC against soft targets, binarized at LABEL_THRESHOLD."""
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_true = keras.ops.cast(y_true > LABEL_THRESHOLD, y_pred.dtype)
+        return super().update_state(y_true, y_pred, sample_weight)
+
+
+@keras.saving.register_keras_serializable(package="stk")
+class SoftBinaryAccuracy(keras.metrics.BinaryAccuracy):
+    """BinaryAccuracy against soft targets, binarized at LABEL_THRESHOLD."""
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_true = keras.ops.cast(y_true > LABEL_THRESHOLD, y_pred.dtype)
+        return super().update_state(y_true, y_pred, sample_weight)
+
+
 def compile_model(model, learning_rate=1e-3):
     """Multi-label, so binary crossentropy per finding -- NOT categorical.
     A knee can have an ACL tear and an effusion at the same time.
+
+    The loss keeps the soft targets as they are: 0.96 rather than 1 is the
+    labeller saying it is confident but not certain, and that is worth learning.
+    Only the metrics binarize -- see above.
     """
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate),
         loss="binary_crossentropy",
-        metrics=[keras.metrics.AUC(name="auc", multi_label=True),
-                 keras.metrics.BinaryAccuracy(name="acc")],
+        metrics=[SoftAUC(name="auc", multi_label=True),
+                 SoftBinaryAccuracy(name="acc")],
     )
     return model
 
