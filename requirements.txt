@@ -13,6 +13,7 @@ numpy==2.2.6
 pandas==2.3.3
 pydicom==3.0.2
 pillow==12.3.0            # PNG contact sheets in /studies/.../preview.png
+scikit-learn==1.7.2       # back in the image: /predict/report loads the TF-IDF vectorizer
 
 # --- api -----------------------------------------------------------------
 fastapi==0.141.1

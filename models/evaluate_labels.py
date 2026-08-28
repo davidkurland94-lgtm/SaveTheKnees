@@ -59,6 +59,71 @@ def compare(reader_tables, gold=None):
     return out
 
 
+IMAGE_GOLD = paths.DATA / "meta" / "image_model_gold.csv"
+REPORT_GOLD = paths.DATA / "meta" / "report_model_gold.csv"
+
+
+def build_image_model_gold(force=False):
+    """Run the trained IMAGE model over the 58 gold studies -> predictions CSV.
+
+    Refuses to write anything while the checkpoint is untrained -- random
+    numbers in the referee's table would be worse than an empty seat.
+    """
+    if IMAGE_GOLD.exists() and not force:
+        return IMAGE_GOLD
+    from functions.predict import predict_study
+
+    gold = gold_labels(paths.TRAIN_CSV)
+    rows = []
+    for uid in gold.StudyInstanceUID:
+        pred = predict_study(uid)
+        if pred is None:
+            continue
+        if pred.pop("model_status") != "trained":
+            print("image model is still untrained -- train it, then rerun this")
+            return None
+        rows.append({"StudyInstanceUID": uid, **pred})
+    pd.DataFrame(rows).to_csv(IMAGE_GOLD, index=False)
+    print(f"image model gold predictions -> {IMAGE_GOLD}")
+    return IMAGE_GOLD
+
+
+def image_model_vs_llm():
+    """David's image model against every LLM report reader, on the 58 gold."""
+    if not IMAGE_GOLD.exists() and build_image_model_gold() is None:
+        return None
+    gold = gold_labels(paths.TRAIN_CSV)
+    readers = {name: pd.read_csv(path)
+               for name, path in KNOWN_READERS.items() if path.exists()}
+    readers["image_model"] = pd.read_csv(IMAGE_GOLD)
+    return compare(readers, gold).round(3)
+
+
+def david_vs_best_reader():
+    """The final showdown: the image model against whichever report-side
+    reader (Kevin's model or an LLM table) scores best on gold.
+
+    Where the image model wins a finding, the pixels saw something the report
+    pipeline missed -- the "doctor missed it" signal the project exists for.
+    """
+    if not IMAGE_GOLD.exists() and build_image_model_gold() is None:
+        return None
+    gold = gold_labels(paths.TRAIN_CSV)
+
+    candidates = {name: pd.read_csv(path)
+                  for name, path in KNOWN_READERS.items() if path.exists()}
+    if REPORT_GOLD.exists():
+        candidates["report_model"] = pd.read_csv(REPORT_GOLD)
+    scored = compare(candidates, gold)
+    best = scored.drop(index="MEAN (defined)").drop(columns="positives")                  .mean().idxmax()
+
+    table = compare({"image_model": pd.read_csv(IMAGE_GOLD),
+                     best: candidates[best]}, gold).round(3)
+    table["images_win"] = table["image_model"] > table[best]
+    print(f"best report-side reader: {best}")
+    return table
+
+
 def report_model_vs_llm():
     """The models_pipe.ipynb one-liner: the trained report model, Kevin's rule
     baseline, and every LLM reader, side by side on the 58 gold studies."""
@@ -71,6 +136,32 @@ def report_model_vs_llm():
         if path.exists():
             readers[name] = pd.read_csv(path)
     return compare(readers, gold).round(3)
+
+
+OUR_MODELS = ("image_model", "report_model", "kevin_rules")
+
+
+def styled(table):
+    """The notebook view: OUR model's number turns BLUE (and bold) wherever it
+    beats every LLM reader on that finding -- the wins jump out of the sheet.
+    Returns a pandas Styler; use the plain DataFrame for anything programmatic.
+    """
+    llm_cols = [c for c in table.columns if c.startswith(("llm_", "pilkwang"))]
+    ours = [c for c in table.columns if c in OUR_MODELS]
+
+    def paint(row):
+        if not llm_cols or row.name == "MEAN (defined)":
+            bar = None
+        else:
+            bar = row[llm_cols].max()
+        out = []
+        for col in table.columns:
+            win = (bar is not None and col in ours
+                   and pd.notna(row[col]) and row[col] > bar)
+            out.append("color: #1565C0; font-weight: bold" if win else "")
+        return out
+
+    return table.style.apply(paint, axis=1).format(precision=3, na_rep="")
 
 
 def main(argv=None):

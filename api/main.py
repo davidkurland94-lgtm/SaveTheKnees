@@ -33,6 +33,17 @@ state = {}
 async def lifespan(app: FastAPI):
     state["model"], state["status"] = load_predictor()
 
+    # The report model serves alongside the image model. Optional on purpose:
+    # a container built before the artifacts exist still boots, and the
+    # endpoint answers 503 until they do.
+    try:
+        from models.report_model import load_report_predictor
+        state["report"] = load_report_predictor()
+        state["report_status"] = "trained"
+    except Exception:
+        state["report"] = None
+        state["report_status"] = "untrained"
+
 
     import numpy as np
     state["model"].predict(
@@ -67,7 +78,8 @@ def root():
 @app.get("/health")
 def health():
     """Cloud Run's readiness probe. Cheap on purpose -- no inference here."""
-    return {"status": "ok", "model": state.get("status", "not_loaded")}
+    return {"status": "ok", "model": state.get("status", "not_loaded"),
+            "report_model": state.get("report_status", "not_loaded")}
 
 
 @app.post("/predict", response_model=Prediction)
@@ -96,6 +108,34 @@ async def predict(files: list[UploadFile] = File(...)):
                           predictions=result)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+class ReportIn(BaseModel):
+    text: str
+
+
+class ReportPrediction(BaseModel):
+    model_status: str
+    predictions: dict[str, float]
+
+
+@app.post("/predict/report", response_model=ReportPrediction)
+def predict_report_endpoint(body: ReportIn):
+    """English report text in, twelve finding probabilities out.
+
+    Text, not a StudyInstanceUID, because the serving container carries no
+    dataset -- this is the endpoint a new, unseen report arrives through.
+    UID-keyed prediction lives in models.report_model.predict_report for
+    environments that have the data.
+    """
+    if state.get("report") is None:
+        raise HTTPException(503, "report model not trained yet -- "
+                                 "run: python -m models.report_model")
+    model, vectorizer = state["report"]
+    x = vectorizer.transform([body.text]).toarray().astype("float32")
+    probs = model.predict(x, verbose=0)[0]
+    return ReportPrediction(model_status=state["report_status"],
+                            predictions={l: float(p) for l, p in zip(LABELS, probs)})
 
 
 @app.post("/predict/path", response_model=Prediction)

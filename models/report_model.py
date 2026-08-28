@@ -1,39 +1,3 @@
-"""The trainable report reader: English report text in, 12 findings out.
-
-WHY THIS EXISTS (and what it replaced)
-    The first report reader was a rule engine: a hand-written 500-entry
-    dictionary and 600 lines of patterns (see notebooks/kevin/NLP_Knees.ipynb,
-    where it still lives). This model learns the vocabulary FROM the corpus
-    instead: TF-IDF turns each translated report into weighted word/bigram
-    counts, a small dense head maps those to the twelve findings, and nothing
-    about knees is written into it by hand. On the 58 gold studies the rules
-    scored mean AUC 0.690 (snapshot: data/meta/kevin_rules_gold.csv); this
-    model scores 0.820.
-
-SAME DISCIPLINE AS THE IMAGE MODEL
-    train on   the ~4.3k derived soft labels, gold UIDs excluded, always
-    validate   the 58 human-labelled gold studies (hard 0/1)
-    loss       binary_crossentropy on soft targets; SoftAUC metrics
-    monitor    val_auc, EarlyStopping + checkpoint, exactly like train_model.py
-
-    Text comes from data/meta/reports_en.csv (report_translation's cache).
-    While that cache is still filling, reports whose ORIGINAL text is already
-    English are used directly, so the model can train before every language
-    is translated; retrain when the cache completes to add the rest.
-
-USAGE
-    python -m models.report_model                 # train with defaults
-    python -m models.report_model --epochs 40
-
-    from models.report_model import predict_report
-    predict_report("1.2.826.0.1.3680043.8.498...")     # a StudyInstanceUID
-    predict_report_text("ACL rupture. Joint effusion.")  # raw text variant
-
-ARTIFACTS
-    models/report_model.keras        the trained head
-    models/report_vectorizer.joblib  the fitted TF-IDF vocabulary
-    Both are needed to predict; load_report_predictor() loads the pair.
-"""
 import argparse
 import sys
 from pathlib import Path
@@ -46,7 +10,12 @@ import pandas as pd
 
 from functions import paths
 from functions.labels import LABELS, derived_labels, gold_labels
-from functions.report_translation import TRANSLATIONS_CSV, detect_language
+
+# NOTE: functions.report_translation (deep_translator, langdetect) is imported
+# LAZILY inside the functions that need it. The serving container carries
+# neither package -- predict_report_text and load_report_predictor must import
+# clean with only keras + sklearn on board.
+TRANSLATIONS_CSV = paths.DATA / "meta" / "reports_en.csv"
 
 MODEL_PATH = paths.REPO_ROOT / "models" / "report_model.keras"
 VECTORIZER_PATH = paths.REPO_ROOT / "models" / "report_vectorizer.joblib"
@@ -59,6 +28,8 @@ def english_texts(uids, verbose=True):
     already English (about half the corpus). Studies that are neither are
     returned in `missing` -- they join the corpus when the cache catches up.
     """
+    from functions.report_translation import detect_language
+
     reports = pd.read_csv(paths.TRAIN_CSV).set_index("StudyInstanceUID").Report
     cache = {}
     if Path(TRANSLATIONS_CSV).exists():
@@ -81,28 +52,27 @@ def english_texts(uids, verbose=True):
     return texts, missing
 
 
-def build_head(n_features, n_labels=len(LABELS)):
+def build_head(n_features, n_labels=len(LABELS), hidden=(256, 64), dropout=0.4):
     """TF-IDF vector -> 12 sigmoids. Small on purpose: with ~4k training
     reports, capacity is the enemy."""
     import keras
     from keras import layers
     from models.architectures import SoftAUC, SoftBinaryAccuracy
 
-    model = keras.Sequential([
-        keras.Input(shape=(n_features,), name="tfidf"),
-        layers.Dense(256, activation="relu"),
-        layers.Dropout(0.4),
-        layers.Dense(64, activation="relu"),
-        layers.Dropout(0.2),
-        layers.Dense(n_labels, activation="sigmoid", name="findings"),
-    ])
+    stack = [keras.Input(shape=(n_features,), name="tfidf")]
+    for i, width in enumerate(hidden):
+        stack.append(layers.Dense(width, activation="relu"))
+        stack.append(layers.Dropout(dropout if i == 0 else dropout / 2))
+    stack.append(layers.Dense(n_labels, activation="sigmoid", name="findings"))
+    model = keras.Sequential(stack)
     model.compile(optimizer="adam", loss="binary_crossentropy",
                   metrics=[SoftAUC(name="auc", multi_label=True),
                            SoftBinaryAccuracy(name="accuracy")])
     return model
 
 
-def train(epochs=30, max_features=20000, patience=5, seed=0,
+def train(epochs=30, max_features=20000, patience=5, seed=0, ngram_max=2,
+          hidden=(256, 64), dropout=0.4, gold_csv=None,
           model_path=MODEL_PATH, vectorizer_path=VECTORIZER_PATH, verbose=True):
     import keras
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -124,7 +94,7 @@ def train(epochs=30, max_features=20000, patience=5, seed=0,
 
     # Fit the vocabulary on TRAINING text only -- letting gold shape the idf
     # weights would leak the validation set into the features.
-    vectorizer = TfidfVectorizer(max_features=max_features, ngram_range=(1, 2),
+    vectorizer = TfidfVectorizer(max_features=max_features, ngram_range=(1, ngram_max),
                                  sublinear_tf=True, min_df=3)
     x = vectorizer.fit_transform(x_text).toarray().astype("float32")
     x_gold = vectorizer.transform(
@@ -134,7 +104,7 @@ def train(epochs=30, max_features=20000, patience=5, seed=0,
         print(f"training on {x.shape[0]} reports x {x.shape[1]} features; "
               f"validating on {x_gold.shape[0]} gold")
 
-    model = build_head(x.shape[1])
+    model = build_head(x.shape[1], hidden=hidden, dropout=dropout)
     model_path.parent.mkdir(parents=True, exist_ok=True)
     model.fit(
         x, y, validation_data=(x_gold, y_gold),
@@ -152,7 +122,7 @@ def train(epochs=30, max_features=20000, patience=5, seed=0,
     probs = model.predict(x_gold, verbose=0)
     scores = pd.DataFrame(probs, columns=LABELS)
     scores.insert(0, "StudyInstanceUID", gold.StudyInstanceUID.values)
-    out = paths.DATA / "meta" / "report_model_gold.csv"
+    out = Path(gold_csv) if gold_csv else paths.DATA / "meta" / "report_model_gold.csv"
     scores.to_csv(out, index=False)
     if verbose:
         print(f"saved {model_path.name} + {vectorizer_path.name}; gold predictions -> {out}")

@@ -10,10 +10,6 @@ matplotlib==3.10.9
 
 pylint==4.0.7
 
-# scikit-learn: only models/evaluate_labels.py (exact AUC vs gold) -- a dev
-# analysis tool, so it stays out of the serving image.
-scikit-learn==1.7.2
-
 # --- 3D viewer (functions/dicom_3d.py) --------------------------------------
 # Dev-only: nothing in the API imports it, so none of this enters the Docker
 # image. scipy is already a transitive dep of scikit-learn; pinned here because
