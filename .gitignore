@@ -4,6 +4,7 @@
 data/
 data/tensor_cache/
 *.keras
+models/*.keras
 !data/.gitkeep
 # Guard against a stray data dir created by running notebooks from notebooks/
 notebooks/data/
