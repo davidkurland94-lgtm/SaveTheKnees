@@ -18,6 +18,23 @@ from functions.labels import LABELS, derived_labels, gold_labels
 TRANSLATIONS_CSV = paths.DATA / "meta" / "reports_en.csv"
 
 MODEL_PATH = paths.REPO_ROOT / "models" / "report_model.keras"
+MEDICAL_TERMS = paths.DATA / "meta" / "medical_terms.txt"
+
+
+def term_features(texts, terms_file=MEDICAL_TERMS):
+    """log1p count of each medical term per report -- Kevin's dictionary as
+    FEATURES the model weighs, not rules that decide. Measured on gold:
+    the same terms score 0.765 as features vs 0.690 as the old rule engine,
+    and concatenated to TF-IDF they lift the bagged model 0.854 -> 0.858.
+    The term list is DATA (one term per line), editable without touching code;
+    when the file is absent the feature block is simply empty."""
+    import re
+    if not Path(terms_file).exists():
+        return np.zeros((len(texts), 0), dtype="float32")
+    terms = [t for t in Path(terms_file).read_text(encoding="utf-8").splitlines() if t.strip()]
+    patterns = [re.compile(r"(?<!\w)" + re.escape(t) + r"(?!\w)", re.IGNORECASE) for t in terms]
+    counts = np.array([[len(p.findall(str(t)))for p in patterns] for t in texts], dtype="float32")
+    return np.log1p(counts)
 VECTORIZER_PATH = paths.REPO_ROOT / "models" / "report_vectorizer.joblib"
 
 
@@ -72,7 +89,7 @@ def build_head(n_features, n_labels=len(LABELS), hidden=(256, 64), dropout=0.4):
 
 
 def train(epochs=30, max_features=20000, patience=5, seed=0, ngram_max=2,
-          hidden=(256, 64), dropout=0.4, gold_csv=None,
+          hidden=(256, 64), dropout=0.4, gold_csv=None, use_terms=False,
           model_path=MODEL_PATH, vectorizer_path=VECTORIZER_PATH, verbose=True):
     import keras
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -96,9 +113,13 @@ def train(epochs=30, max_features=20000, patience=5, seed=0, ngram_max=2,
     # weights would leak the validation set into the features.
     vectorizer = TfidfVectorizer(max_features=max_features, ngram_range=(1, ngram_max),
                                  sublinear_tf=True, min_df=3)
-    x = vectorizer.fit_transform(x_text).toarray().astype("float32")
-    x_gold = vectorizer.transform(
-        [gold_texts[u] for u in gold.StudyInstanceUID]).toarray().astype("float32")
+    gold_text_list = [gold_texts[u] for u in gold.StudyInstanceUID]
+    blocks = [vectorizer.fit_transform(x_text).toarray().astype("float32")]
+    gold_blocks = [vectorizer.transform(gold_text_list).toarray().astype("float32")]
+    if use_terms:
+        blocks.append(term_features(x_text))
+        gold_blocks.append(term_features(gold_text_list))
+    x, x_gold = np.hstack(blocks), np.hstack(gold_blocks)
     y_gold = gold[LABELS].to_numpy(dtype="float32")
     if verbose:
         print(f"training on {x.shape[0]} reports x {x.shape[1]} features; "

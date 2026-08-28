@@ -139,7 +139,7 @@ def report_model_vs_llm():
 
 
 OUR_MODELS = ("image_model", "image_multiplane", "report_model",
-              "kevin_rules", "fusion_model")
+              "report_bagged", "kevin_rules", "fusion_model")
 
 # Every reader this project has produced, added to tables when its gold
 # predictions exist. fusion_model_gold.csv is written by models/train_fusion.py
@@ -148,6 +148,7 @@ OUR_READERS = {
     "image_model": "image_model_gold.csv",          # serving checkpoint (sagittal)
     "image_multiplane": "image_multiplane_gold.csv",
     "report_model": "report_model_gold.csv",
+    "report_bagged": "report_bagged_gold.csv",      # tfidf+terms, 5-fold x 2-seed bag
     "kevin_rules": "kevin_rules_gold.csv",
     "fusion_model": "fusion_model_gold.csv",        # images + report, jointly trained
 }
