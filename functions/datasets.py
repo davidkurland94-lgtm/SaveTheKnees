@@ -131,6 +131,50 @@ def make_multiplane_dataset(uids, labels, cache_dir, batch_size=4,
     return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
 
+def make_fusion_dataset(uids, labels, text_matrix, cache_dir, batch_size=4,
+                        shuffle=False, augment=False):
+    """(3 image planes + report TF-IDF vector, labels) per study.
+
+    text_matrix: (len(uids), text_dim) float32, row-aligned with uids -- the
+    report vectorizer's transform, precomputed once (transforming inside the
+    pipeline would re-tokenize every epoch for nothing).
+    """
+    import functools
+
+    uids = np.asarray(uids)
+    labels = np.asarray(labels, dtype="float32")
+    text_matrix = np.asarray(text_matrix, dtype="float32")
+    if not (len(uids) == len(labels) == len(text_matrix)):
+        raise ValueError(f"misaligned: {len(uids)} uids, {len(labels)} labels, "
+                         f"{len(text_matrix)} text rows")
+    shape = (K, IMG_SIZE, IMG_SIZE, 1)
+
+    def read(uid, text, y):
+        planes = tuple(
+            tf.numpy_function(
+                functools.partial(
+                    lambda u, a: load_cached(u.decode(), cache_dir, a), a=axis),
+                [uid], tf.float32)
+            for axis in ("X", "Y", "Z"))
+        for x in planes:
+            x.set_shape(shape)
+        y.set_shape((len(LABELS),))
+        return planes + (text,), y
+
+    ds = tf.data.Dataset.from_tensor_slices((uids, text_matrix, labels))
+    if shuffle:
+        ds = ds.shuffle(len(uids), reshuffle_each_iteration=True)
+    ds = ds.map(read, num_parallel_calls=tf.data.AUTOTUNE)
+    if augment:
+        one = make_augmenter(as_channels=False)
+        def augment_images(inputs, y):
+            planes, text = inputs[:3], inputs[3]
+            out = tuple(one(x, y)[0] for x in planes)   # text is never augmented
+            return out + (text,), y
+        ds = ds.map(augment_images, num_parallel_calls=tf.data.AUTOTUNE)
+    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+
 def make_dataset(uids, labels, cache_dir, batch_size=8, shuffle=False,
                  axis="X", as_channels=False, augment=False):
     """(study UIDs, label array) -> a batched tf.data.Dataset reading the cache.

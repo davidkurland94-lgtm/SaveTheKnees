@@ -138,7 +138,33 @@ def report_model_vs_llm():
     return compare(readers, gold).round(3)
 
 
-OUR_MODELS = ("image_model", "report_model", "kevin_rules")
+OUR_MODELS = ("image_model", "image_multiplane", "report_model",
+              "kevin_rules", "fusion_model")
+
+# Every reader this project has produced, added to tables when its gold
+# predictions exist. fusion_model_gold.csv is written by models/train_fusion.py
+# at the end of its run -- until then the column simply is not there.
+OUR_READERS = {
+    "image_model": "image_model_gold.csv",          # serving checkpoint (sagittal)
+    "image_multiplane": "image_multiplane_gold.csv",
+    "report_model": "report_model_gold.csv",
+    "kevin_rules": "kevin_rules_gold.csv",
+    "fusion_model": "fusion_model_gold.csv",        # images + report, jointly trained
+}
+
+
+def final_table():
+    """THE report: every reader -- LLMs, both image models, the report model,
+    the rules baseline, and the fusion model -- against the 58 gold studies.
+    Columns appear as their predictions files exist."""
+    gold = gold_labels(paths.TRAIN_CSV)
+    readers = {name: pd.read_csv(path)
+               for name, path in KNOWN_READERS.items() if path.exists()}
+    for name, fname in OUR_READERS.items():
+        path = paths.DATA / "meta" / fname
+        if path.exists():
+            readers[name] = pd.read_csv(path)
+    return compare(readers, gold).round(3)
 
 
 def styled(table):

@@ -138,6 +138,32 @@ def build_model_multiplane(input_shape, n_labels=len(LABELS)):
                         outputs=classification_head(fused, n_labels))
 
 
+def build_model_fusion(input_shape, text_dim, n_labels=len(LABELS)):
+    """The capstone: one study's THREE image planes PLUS its report -> labels.
+
+    Late fusion (averaging the two finished models) already scores 0.877 on
+    gold against 0.683/0.855 for the parents -- the modalities are strongly
+    complementary. This model goes one step further: the image encoders and
+    the text branch train JOINTLY, so the head learns per-finding trust (read
+    Effusion off the pixels, ACL off the words) instead of a fixed vote.
+
+    Inputs: three (K, H, W, 1) volumes + one (text_dim,) TF-IDF vector from
+    the report model's fitted vectorizer. All TensorFlow -- no torch anywhere.
+    """
+    plane_inputs = [layers.Input(shape=input_shape, name=f"plane_{name}")
+                    for name in ("sagittal", "coronal", "axial")]
+    text_input = layers.Input(shape=(text_dim,), name="report_tfidf")
+
+    image_features = [_encode_3d(inp) for inp in plane_inputs]        # 3 x (64,)
+    text = layers.Dense(256, activation="relu")(text_input)
+    text = layers.Dropout(0.4)(text)
+    text = layers.Dense(64, activation="relu")(text)                  # (64,)
+
+    fused = layers.Concatenate()(image_features + [text])             # (256,)
+    return models.Model(inputs=plane_inputs + [text_input],
+                        outputs=classification_head(fused, n_labels))
+
+
 def build_model(input_shape, n_labels=len(LABELS)):
     """One sample's shape -> a compile-ready model.
 

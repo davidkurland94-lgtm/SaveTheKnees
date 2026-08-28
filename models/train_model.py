@@ -190,7 +190,13 @@ def run(args):
 
     # 5. The per-sample shape comes off the data, never hardcoded (the
     #    multi-plane model's three inputs share one per-plane shape).
-    if args.multi_plane:
+    if args.resume_from and Path(args.resume_from).exists():
+        # A checkpoint saved by ModelCheckpoint carries the optimizer state,
+        # so this continues the SAME training run -- decayed learning rate and
+        # all -- instead of starting a new one from good weights.
+        model = tf.keras.models.load_model(args.resume_from)
+        log.info("resumed from %s", args.resume_from)
+    elif args.multi_plane:
         one_sample = next(iter(train_ds))[0][0].shape[1:]
         log.info("one sample %s x 3 planes", one_sample)
         model = compile_model(build_model_multiplane(one_sample))
@@ -254,6 +260,9 @@ def parse_args(argv=None):
     out = p.add_argument_group("output")
     out.add_argument("--checkpoint", type=Path, default=Path("best_model.keras"),
                      help="best-so-far weights, written every time val_auc improves")
+    out.add_argument("--resume-from", type=Path, default=None,
+                     help="continue training from a saved checkpoint (optimizer "
+                          "state included) instead of building a fresh model")
     out.add_argument("--scores-out", type=Path, default=None,
                      help="optional CSV for the per-label AUC table")
 
