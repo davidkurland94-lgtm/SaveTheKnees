@@ -92,6 +92,28 @@ def make_augmenter(as_channels):
     return augment
 
 
+def add_mixup(ds, alpha=0.2, n_inputs=1):
+    """Mixup on BATCHED (x, y): convex blend of each batch with a shuffled copy
+    of itself. Our targets are already soft probabilities, so blended labels
+    are just more of the same -- no binarization anywhere in the loss path.
+    One lambda per batch (the usual simplification). Training splits only;
+    never wrap a validation dataset."""
+    import tensorflow as tf
+
+    def mix(x, y):
+        g1 = tf.random.gamma([], alpha)
+        lam = g1 / (g1 + tf.random.gamma([], alpha))    # Beta(alpha, alpha)
+        idx = tf.random.shuffle(tf.range(tf.shape(y)[0]))
+        if n_inputs > 1:
+            x = tuple(lam * xi + (1 - lam) * tf.gather(xi, idx) for xi in x)
+        else:
+            x = lam * x + (1 - lam) * tf.gather(x, idx)
+        y = lam * y + (1 - lam) * tf.gather(y, idx)
+        return x, y
+
+    return ds.map(mix, num_parallel_calls=tf.data.AUTOTUNE)
+
+
 def make_multiplane_dataset(uids, labels, cache_dir, batch_size=4,
                             shuffle=False, augment=False):
     """Like make_dataset, but each sample is (sagittal, coronal, axial) of one

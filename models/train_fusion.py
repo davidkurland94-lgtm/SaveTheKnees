@@ -77,11 +77,28 @@ def run(args):
     train_ds = make_fusion_dataset(train_index.StudyInstanceUID, train_index[LABELS],
                                    x_text_train, args.cache, batch_size=args.batch_size,
                                    shuffle=True, augment=args.augment)
+    if args.mixup:
+        from functions.datasets import add_mixup
+        train_ds = add_mixup(train_ds, n_inputs=4)
     gold_ds = make_fusion_dataset(gold.StudyInstanceUID, gold[LABELS],
                                   x_text_gold, args.cache, batch_size=args.batch_size)
 
     model = compile_model(build_model_fusion((24, 224, 224, 1), x_text_train.shape[1]))
     print(f"fusion model: {model.count_params():,} params, {len(model.inputs)} inputs")
+
+    if args.warm_start:
+        # Transplant the trained multi-plane encoders: both models build their
+        # image branches from the same _encode_3d blocks, so the Conv3D layers
+        # correspond one-to-one in build order. The text branch and head stay
+        # fresh -- they are what fusion exists to learn.
+        import keras
+        donor = keras.saving.load_model(args.warm_start, compile=False)
+        src = [l for l in donor.layers if "Conv3D" in type(l).__name__]
+        dst = [l for l in model.layers if "Conv3D" in type(l).__name__]
+        assert len(src) == len(dst) == 9, f"encoder mismatch: {len(src)} vs {len(dst)}"
+        for a, b in zip(src, dst):
+            b.set_weights(a.get_weights())
+        print(f"warm-started 9 Conv3D layers from {args.warm_start}")
 
     model.fit(train_ds, validation_data=gold_ds, epochs=args.epochs, verbose=2,
               callbacks=[
@@ -99,7 +116,7 @@ def run(args):
     probs = model.predict(gold_ds, verbose=0)
     out = pd.DataFrame(probs, columns=LABELS)
     out.insert(0, "StudyInstanceUID", gold.StudyInstanceUID.values)
-    out_csv = paths.DATA / "meta" / "fusion_model_gold.csv"
+    out_csv = args.gold_out or (paths.DATA / "meta" / "fusion_model_gold.csv")
     out.to_csv(out_csv, index=False)
     print(f"gold predictions -> {out_csv}")
 
@@ -113,6 +130,13 @@ def parse_args(argv=None):
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--patience", type=int, default=15)
     p.add_argument("--augment", action="store_true")
+    p.add_argument("--mixup", action="store_true",
+                   help="batch-level mixup on images+text+soft labels (train only)")
+    p.add_argument("--warm-start", type=Path, default=None,
+                   help="multi-plane checkpoint whose Conv3D encoders seed this model")
+    p.add_argument("--gold-out", type=Path, default=None,
+                   help="where to write gold predictions (default fusion_model_gold.csv; "
+                        "give each seed its own file so ensembles can average them)")
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args(argv)
 

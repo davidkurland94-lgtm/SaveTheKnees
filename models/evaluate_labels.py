@@ -130,16 +130,14 @@ def report_model_vs_llm():
     gold = gold_labels(paths.TRAIN_CSV)
     readers = {name: pd.read_csv(path)
                for name, path in KNOWN_READERS.items() if path.exists()}
-    for name, fname in [("report_model", "report_model_gold.csv"),
-                        ("kevin_rules", "kevin_rules_gold.csv")]:
-        path = paths.DATA / "meta" / fname
-        if path.exists():
-            readers[name] = pd.read_csv(path)
+    path = paths.DATA / "meta" / "report_model_gold.csv"
+    if path.exists():
+        readers["report_model"] = pd.read_csv(path)
     return compare(readers, gold).round(3)
 
 
 OUR_MODELS = ("image_model", "image_multiplane", "report_model",
-              "report_bagged", "kevin_rules", "fusion_model")
+              "report_bagged", "fusion_model")
 
 # Every reader this project has produced, added to tables when its gold
 # predictions exist. fusion_model_gold.csv is written by models/train_fusion.py
@@ -149,7 +147,6 @@ OUR_READERS = {
     "image_multiplane": "image_multiplane_gold.csv",
     "report_model": "report_model_gold.csv",
     "report_bagged": "report_bagged_gold.csv",      # tfidf+terms, 5-fold x 2-seed bag
-    "kevin_rules": "kevin_rules_gold.csv",
     "fusion_model": "fusion_model_gold.csv",        # images + report, jointly trained
 }
 
@@ -189,6 +186,60 @@ def styled(table):
         return out
 
     return table.style.apply(paint, axis=1).format(precision=3, na_rep="")
+
+
+PLOT_SERIES = [   # fixed order + fixed hues (palette slots 1-4, validated); never re-assigned
+    ("llm_v4_blend", "LLM benchmark", "#2a78d6", "o"),
+    ("image_multiplane", "images (3-seed ens.)", "#eb6834", "s"),
+    ("report_bagged", "report (10-model bag)", "#1baf7a", "D"),
+    ("fusion_model", "fusion v2 (2-seed ens.)", "#eda100", "^"),
+]
+
+
+def plot_readers(save=None):
+    """Per-finding gold AUC, our readers vs the LLM benchmark - a dot plot.
+
+    Findings on y (sorted by the benchmark), AUC on x. Dots encode POSITION,
+    so the 0.45 axis start is legitimate (unlike bar length); the 0.5 chance
+    line is drawn. Marker shapes duplicate the color coding (CVD safety), and
+    the full table view of the same numbers sits beside this in the notebook.
+    """
+    import matplotlib.pyplot as plt
+
+    table = final_table().drop(index="MEAN (defined)")
+    order = table["llm_v4_blend"].sort_values().index          # benchmark-sorted
+    table = table.loc[order]
+    y = range(len(table))
+
+    fig, ax = plt.subplots(figsize=(9, 6.8), facecolor="#fcfcfb")
+    ax.set_facecolor("#fcfcfb")
+    ax.grid(axis="x", color="#e6e5e1", linewidth=0.8, zorder=0)
+    ax.axvline(0.5, color="#52514e", linewidth=0.8, linestyle=":", zorder=1)
+    for spine in ("top", "right", "left"):
+        ax.spines[spine].set_visible(False)
+    ax.spines["bottom"].set_color("#c3c2b7")
+
+    for col, label, color, marker in PLOT_SERIES:
+        if col not in table.columns:
+            continue
+        mean = table[col].mean()
+        ax.scatter(table[col], y, s=80, color=color, marker=marker, zorder=3,
+                   edgecolors="#fcfcfb", linewidths=1.5,
+                   label=f"{label} — mean {mean:.3f}")
+
+    labels = [f"{name}   ({int(table.loc[name, 'positives'])}+)" for name in table.index]
+    ax.set_yticks(list(y), labels, fontsize=10, color="#0b0b0b")
+    ax.set_xlim(0.45, 1.0)
+    ax.tick_params(colors="#52514e", labelsize=9)
+    ax.set_xlabel("AUC on the 58 gold studies   (dotted line = chance)",
+                  fontsize=9, color="#52514e")
+    ax.set_title("Per-finding gold AUC — our readers vs the LLM benchmark",
+                 fontsize=12, color="#0b0b0b", loc="left", pad=14)
+    ax.legend(loc="lower left", frameon=False, fontsize=9, labelcolor="#0b0b0b")
+    fig.tight_layout()
+    if save:
+        fig.savefig(save, dpi=150, facecolor=fig.get_facecolor())
+    return fig
 
 
 def main(argv=None):
