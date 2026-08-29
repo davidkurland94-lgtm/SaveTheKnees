@@ -17,3 +17,12 @@ Docs/
 requirements-dev.txt
 *.md
 .DS_Store
+
+# Serving needs exactly these three artifacts: knee_findings.keras,
+# report_model.keras, report_vectorizer.joblib (kept implicitly). Every other
+# checkpoint is a training byproduct -- seed variants, superseded recipes --
+# and has no business inflating the image.
+models/knee_findings_25d.keras
+models/knee_findings_aug.keras
+models/knee_fusion*.keras
+models/knee_multiplane*.keras

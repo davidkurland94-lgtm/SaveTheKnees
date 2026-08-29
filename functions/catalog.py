@@ -131,22 +131,37 @@ def get_series(study_uid, series_uid):
     return _series_record(next(own.itertuples(index=False)))
 
 
-def get_report(study_uid):
-    """The radiology report, exactly as the dataset ships it.
+@lru_cache(maxsize=1)
+def _translations():
+    """The English translation cache, built once by functions.report_translation
+    for the report model. None when the file has not been built locally."""
+    path = DATA_ROOT / "meta" / "reports_en.csv"
+    if not path.exists():
+        return None
+    return pd.read_csv(path).set_index("StudyInstanceUID")
 
-    The corpus is MIXED LANGUAGE: roughly half the 4,407 reports are already
-    written in English, the rest are Spanish, Greek, Bulgarian, Turkish,
-    Croatian, Dutch, German or French. Nothing here translates them.
 
-    Do not go looking for a translated column elsewhere -- there isn't one.
-    pilkwang's report_labels_v2.csv is twelve findings x (value, __conf,
-    __verdict) and no text; its labeler reads each report in its source
-    language on purpose. The Report columns in train_folds.csv and
-    train_folds_with_pseudo.csv are byte-identical copies of this one.
+def get_report(study_uid, lang="original"):
+    """The radiology report.
+
+    The corpus is MIXED LANGUAGE (half English; the rest es/tr/hr/bg/el/nl/de).
+    lang="original" (default) returns it exactly as the dataset ships it;
+    lang="en" serves the machine translation from data/meta/reports_en.csv --
+    the same cache the report model trains on -- and returns None when that
+    file is absent or the study is not in it.
     """
     df = studies()
     if study_uid not in df.index:
         return None
+
+    if lang == "en":
+        translations = _translations()
+        if translations is None or study_uid not in translations.index:
+            return None
+        row = translations.loc[study_uid]
+        return {"study_uid": study_uid, "language": "en",
+                "source_language": str(row.language), "report": str(row.report_en)}
+
     report = df.loc[study_uid, "Report"]
     if pd.isna(report):
         return None

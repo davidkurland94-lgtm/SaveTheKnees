@@ -17,13 +17,26 @@ services:
   train:
     image: nvcr.io/nvidia/tensorflow:25.02-tf2-py3
     gpus: all
+    # NVIDIA's own recommendation -- the default 64MB shm starves tf.data.
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    environment:
+      # The NGC image defaults tf.keras to legacy Keras 2, whose Python-3.12
+      # randint bug crashes the first Conv3D. Our code is Keras 3.
+      TF_USE_LEGACY_KERAS: "0"
     working_dir: /app
     volumes:
       - .:/app
       - ./data:/app/data
+    # Reproduces the CANONICAL serving model: sagittal + augmentation (the
+    # recipe that took gold 0.683 -> 0.754). gold images live inside
+    # train_series; the derived table is the v4 blend from the Kaggle meta.
     command: >
       bash -c "pip install --no-cache-dir -q pydicom pandas
-      && python -m models.train_model
+      && python -m models.train_model --augment
+      --epochs 100 --patience 15
       --gold-images data/train_series
       --derived-labels data/meta/rsna-knee-llm-report-labels/llm_labels_v4_blend.csv
       --checkpoint models/knee_findings.keras"

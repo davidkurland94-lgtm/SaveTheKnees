@@ -14,6 +14,8 @@ pandas==2.3.3
 pydicom==3.0.2
 pillow==12.3.0            # PNG contact sheets in /studies/.../preview.png
 scikit-learn==1.7.2       # back in the image: /predict/report loads the TF-IDF vectorizer
+joblib==1.5.3             # direct import (vectorizer load); would come via sklearn, pinned because we call it
+pydantic==2.13.4          # direct import (api request models); would come via fastapi, pinned because we call it
 
 # --- api -----------------------------------------------------------------
 fastapi==0.141.1

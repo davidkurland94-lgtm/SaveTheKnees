@@ -43,17 +43,20 @@ def get_study(study_uid: str):
 
 
 @router.get("/{study_uid}/report")
-def get_report(study_uid: str):
-    """The radiology report, as the dataset ships it.
+def get_report(study_uid: str,
+               lang: str = Query("original", pattern="^(original|en)$")):
+    """The radiology report.
 
-    Mixed language by design: about half the corpus is already English, the
-    rest is Spanish, Greek, Bulgarian, Turkish, Croatian, Dutch, German or
-    French. Nothing translates them, and no translated copy exists in the
-    dataset -- see functions.catalog.get_report.
+    Mixed language corpus (half English, the rest es/tr/hr/bg/el/nl/de).
+    Default: exactly as the dataset ships it. lang=en serves the machine
+    translation the report model trains on (data/meta/reports_en.csv);
+    404 when that cache is not mounted.
     """
-    report = _guard(catalog.get_report, study_uid)
+    report = _guard(catalog.get_report, study_uid, lang)
     if report is None:
-        raise HTTPException(404, f"No report for study: {study_uid}")
+        detail = (f"No English translation available for {study_uid}" if lang == "en"
+                  else f"No report for study: {study_uid}")
+        raise HTTPException(404, detail)
     return report
 
 
