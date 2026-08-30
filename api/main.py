@@ -19,6 +19,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from api.report import router as report_router
 from api.studies import router as studies_router
 from functions.labels import LABELS
 from functions.predict import load_predictor, predict_series
@@ -69,6 +70,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"],
 
 # Read-only dataset endpoints: studies, series, reports, pilkwang labels.
 app.include_router(studies_router)
+# Evaluation artifacts + model summaries: what the notebook's remote mode reads.
+app.include_router(report_router)
 
 
 class Prediction(BaseModel):

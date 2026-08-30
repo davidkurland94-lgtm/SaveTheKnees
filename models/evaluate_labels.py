@@ -196,7 +196,7 @@ PLOT_SERIES = [   # fixed order + fixed hues (palette slots 1-4, validated); nev
 ]
 
 
-def plot_readers(save=None):
+def plot_readers(save=None, table=None):
     """Per-finding gold AUC, our readers vs the LLM benchmark - a dot plot.
 
     Findings on y (sorted by the benchmark), AUC on x. Dots encode POSITION,
@@ -206,7 +206,7 @@ def plot_readers(save=None):
     """
     import matplotlib.pyplot as plt
 
-    table = final_table().drop(index="MEAN (defined)")
+    table = (final_table() if table is None else table).drop(index="MEAN (defined)", errors="ignore")
     order = table["llm_v4_blend"].sort_values().index          # benchmark-sorted
     table = table.loc[order]
     y = range(len(table))
