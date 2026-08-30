@@ -80,6 +80,29 @@ def get_label(study_uid: str, label: str):
     return result
 
 
+@router.get("/{study_uid}/predict")
+def predict_with_model(study_uid: str,
+                       model: str = Query("fusion", pattern="^(sagittal|multiplane|fusion)$")):
+    """Run one of OUR trained models on a study by UID.
+
+    sagittal    the single-plane 3D CNN (also behind POST /predict)
+    multiplane  the 3-seed sagittal+coronal+axial ensemble
+    fusion      images + report, jointly trained -- the project's best (default)
+
+    Needs the tensor cache (and, for fusion, the translated reports) mounted
+    under data/, which is why this is study-keyed rather than an upload.
+    """
+    from functions.predict import predict_study_with
+    try:
+        result = predict_study_with(study_uid, model)
+    except FileNotFoundError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, f"{study_uid}: not cached for model '{model}' "
+                                 "(needs the tensor cache; fusion also needs reports_en.csv)")
+    return {"study_uid": study_uid, "model": model, "predictions": result}
+
+
 @router.get("/{study_uid}/series")
 def list_series(study_uid: str,
                 plane: str | None = Query(None, description="Sagittal | Coronal | Axial")):

@@ -107,6 +107,71 @@ def predict_study(study_uid, axis="X", data_root=None):
     return {"model_status": status, **predict_tensor(model, x)}
 
 
+# ---------------------------------------------------------------------------
+# Study-keyed prediction with ANY trained model -- the way to reach the
+# multi-plane ensemble and the fusion model, whose inputs (3 volumes, plus the
+# report for fusion) only exist server-side, in the tensor + translation caches.
+# ---------------------------------------------------------------------------
+
+STUDY_MODELS = {
+    "sagittal":   ["knee_findings.keras"],
+    "multiplane": ["knee_multiplane.keras", "knee_multiplane_s1.keras", "knee_multiplane_s2.keras"],
+    "fusion":     ["knee_fusion_v2_s0.keras", "knee_fusion_v2_s1.keras"],
+}
+_study_models = {}
+
+
+def _load_study_models(name):
+    """Load (and cache) the checkpoints behind one STUDY_MODELS entry;
+    returns [] when none is on disk so the caller can 503 honestly."""
+    if name not in _study_models:
+        models = []
+        for fname in STUDY_MODELS[name]:
+            path = REPO_ROOT / "models" / fname
+            if path.exists():
+                models.append(keras.saving.load_model(path, compile=False))
+        _study_models[name] = models
+    return _study_models[name]
+
+
+def predict_study_with(study_uid, model="fusion", data_root=None):
+    """StudyInstanceUID -> {label: probability} using the chosen trained model
+    ("sagittal" | "multiplane" | "fusion"). Ensembles average their seeds.
+
+    Reads the tensor cache (all three axes for multiplane/fusion) and, for
+    fusion, the translated report through the report model's vectorizer.
+    Returns None when the study is not cached for that model's inputs, or
+    raises FileNotFoundError when the checkpoints are absent.
+    """
+    import numpy as np
+    import pandas as pd
+    from functions.tensor_cache import cache_path, load_cached
+
+    data_root = Path(data_root) if data_root else REPO_ROOT / "data"
+    cache_dir = data_root / "tensor_cache"
+    models = _load_study_models(model)
+    if not models:
+        raise FileNotFoundError(f"no checkpoint for '{model}' under models/")
+
+    axes = ("X",) if model == "sagittal" else ("X", "Y", "Z")
+    if not all(cache_path(study_uid, cache_dir, a).exists() for a in axes):
+        return None
+    inputs = [load_cached(study_uid, cache_dir, a)[None, ...] for a in axes]
+
+    if model == "fusion":
+        import joblib
+        texts = pd.read_csv(data_root / "meta" / "reports_en.csv").set_index("StudyInstanceUID")
+        if study_uid not in texts.index:
+            return None
+        vectorizer = joblib.load(REPO_ROOT / "models" / "report_vectorizer.joblib")
+        inputs.append(vectorizer.transform([str(texts.loc[study_uid, "report_en"])])
+                                .toarray().astype("float32"))
+
+    feed = inputs if len(inputs) > 1 else inputs[0]
+    probs = np.mean([m.predict(feed, verbose=0)[0] for m in models], axis=0)
+    return {label: float(p) for label, p in zip(LABELS, probs)}
+
+
 if __name__ == "__main__":
     import pandas as pd
 

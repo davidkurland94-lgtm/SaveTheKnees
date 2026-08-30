@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from api.studies import router as studies_router
@@ -59,6 +60,12 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Browsers refuse cross-origin POSTs unless the API answers the preflight.
+# Without this, a front end on any other origin can GET but never POST.
+# Wide open on purpose: no auth, no cookies, bootcamp scope.
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"])
 
 # Read-only dataset endpoints: studies, series, reports, pilkwang labels.
 app.include_router(studies_router)

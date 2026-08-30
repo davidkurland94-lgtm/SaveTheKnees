@@ -4,12 +4,29 @@ services:
     build: .
     image: stk-api:latest           # reuse the locally built tag instead of a second build
     ports: ["8000:8080"]
-    restart: unless-stopped         # local deployment: survives reboots until compose down
+    restart: always                 # a laptop-hosted server: come back after ANY daemon restart, incl. Docker Desktop quitting
     environment:
-      ALLOW_LOCAL_PATHS: "1"        # local dev only; never set this on Cloud Run
+      # OFF while the tunnel below can expose this API to the internet:
+      # /predict/path reads server-side paths and must not be public. Flip to
+      # "1" for purely local use (nothing else changes).
+      ALLOW_LOCAL_PATHS: "0"
     volumes:
       - ./models:/app/models:ro     # swap in trained weights without rebuilding
       - ./data:/app/data:ro         # so /predict/path and /studies/* reach local data
+
+  # Public HTTPS access from anywhere, no router config, no cloud account:
+  # a Cloudflare quick tunnel. Outbound-only from this machine; the public URL
+  # is printed in the container log and CHANGES on every restart:
+  #     docker compose --profile public up -d tunnel
+  #     docker compose logs tunnel | grep trycloudflare
+  # Anyone with the URL can call the API (there is no auth) -- share it with
+  # the team, not the world.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://api:8080
+    depends_on: [api]
+    restart: always
+    profiles: ["public"]
 
   # Local GPU training. Needs Docker Desktop WSL integration enabled.
   # Blackwell (RTX 5080, sm_120) is why this uses the NGC image rather than a

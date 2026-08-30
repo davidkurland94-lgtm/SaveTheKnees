@@ -97,6 +97,9 @@ def get_study(study_uid):
         "is_golden": len(golden_labels) == len(LABELS),
         "has_report": bool(pd.notna(row.Report)),
         "golden_labels": {k: int(v) for k, v in golden_labels.items()} or None,
+        # The study's sequences inline -- same records as /studies/{uid}/series,
+        # so one call describes the whole study.
+        "series": [_series_record(r) for r in own.itertuples(index=False)],
     }
 
 
