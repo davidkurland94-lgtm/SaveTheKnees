@@ -1,0 +1,32 @@
+# Serving image: CPU-only, which is what Cloud Run gives you.
+# For local GPU TRAINING use an NVIDIA base instead -- see compose.yaml.
+FROM python:3.12-slim
+
+# libgomp1 is TensorFlow's OpenMP runtime; the wheel does not bundle it and
+# the import fails without it on slim.
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TF_CPP_MIN_LOG_LEVEL=2 \
+    KERAS_HOME=/opt/keras \
+    PORT=8080
+
+WORKDIR /app
+
+# Dependencies first, so edits to our own code do not re-run this layer.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY functions/ functions/
+COPY api/ api/
+COPY models/ models/
+
+RUN useradd --create-home --uid 1000 app && chown -R app:app /app
+USER app
+
+EXPOSE 8080
+# JSON form (so signals reach uvicorn) wrapping sh -c (so Cloud Run's injected
+# $PORT is still expanded). exec replaces the shell, keeping uvicorn as PID 1.
+CMD ["sh", "-c", "exec uvicorn api.main:app --host 0.0.0.0 --port ${PORT}"]

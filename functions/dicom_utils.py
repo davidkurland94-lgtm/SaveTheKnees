@@ -1,17 +1,16 @@
-"""
-dicom_utils.py — standalone helpers for opening and working with DICOM files.
+"""DICOM reading, series selection and preview helpers.
 
-No dependency on the rest of the RSNA project scaffold — just pydicom,
-numpy, and (optionally) matplotlib for viewing. Use this to explore real
-competition data once you have it.
+The single surviving dicom-utils module. History: dicom_utils.py, dicom_utils2.py
+and dicom_utils3.py grew as successive iterations in Aux_functions/; v3 was a
+superset of the other two (the one v2-only function, folder_reader, had no
+callers anywhere). Consolidated here so there is exactly ONE copy, importable as
 
-Install requirements:
-    pip install pydicom numpy matplotlib --break-system-packages
-    # if you hit "compressed pixel data" errors, also:
-    pip install pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg --break-system-packages
+    from functions.dicom_utils import load_series, series_to_volume, ...
 
-No PyTorch or Pillow required anywhere in this file -- resizing is done with
-a small pure-numpy bilinear implementation (see resize_slice_array).
+Note the overlap with functions/sequence_to_tensor.py: THAT module is the
+model input contract (fixed k/size/normalisation). This one is for exploring,
+reading and visualising DICOM interactively. When in doubt which to use for
+model work: sequence_to_tensor.
 """
 
 from pathlib import Path

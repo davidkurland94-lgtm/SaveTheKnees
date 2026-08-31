@@ -1,0 +1,14 @@
+{
+  // The project env is save-the-knees-env (see README / .python-version).
+  // Without this line VS Code picks another venv and Pylance flags every
+  // import while the code runs fine. Windows path -- on macOS the venv layout
+  // is bin/python, so VS Code just prompts you to select the interpreter once.
+  "python.defaultInterpreterPath": "${workspaceFolder}/save-the-knees-env/Scripts/python.exe",
+
+  // functions/ and api/ are imported as namespace packages from the repo root
+  // (`from functions.predict import ...`), so the root must be on the path.
+  "python.analysis.extraPaths": ["${workspaceFolder}"],
+  "python.analysis.typeCheckingMode": "basic",
+
+  "python.terminal.activateEnvironment": true
+}

@@ -1,0 +1,28 @@
+# The build context must stay small. data/ alone is 17 GB and the venvs are
+# multi-GB -- without this, every `docker build` ships them to the daemon.
+data/
+save-the-knees-env/
+.venv/
+.git/
+notebooks/
+Docs/
+
+**/__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+requirements-dev.txt
+*.md
+.DS_Store
+
+# Serving needs exactly these three artifacts: knee_findings.keras,
+# report_model.keras, report_vectorizer.joblib (kept implicitly). Every other
+# checkpoint is a training byproduct -- seed variants, superseded recipes --
+# and has no business inflating the image.
+models/knee_findings_25d.keras
+models/knee_findings_aug.keras
+models/knee_fusion*.keras
+models/knee_multiplane*.keras

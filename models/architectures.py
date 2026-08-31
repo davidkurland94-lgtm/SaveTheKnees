@@ -1,50 +1,36 @@
-"""What the network looks like, and how it learns.
-
-PIPELINE POSITION
-    Step 4 of 5. Takes the per-sample shape read off a dataset from
-    `functions/datasets.py`, and returns a model for `train_model.py` to fit.
-
-        labels.py  ->  tensor_cache.py  ->  datasets.py  ->  ARCHITECTURES.PY
-                                                          -> train_model.py
-
-WHEN TO USE IT
-    Whenever a model object is needed - training, evaluation, or loading weights
-    for inference. Pure Keras: no file I/O, no paths, no data. You can import it
-    and call `build_model((24, 224, 224, 1)).summary()` with nothing on disk,
-    which makes it the cheapest part of the pipeline to inspect and to test.
-
-CALL ORDER
-    build_model(input_shape)  ->  compile_model(model)  ->  fit
-
-    Kept as separate calls on purpose. A single function that builds, compiles
-    and fits cannot train more epochs, resume later, or train a model loaded
-    from a file - calling it twice throws the first model away and starts over.
-
-CHOOSING THE ARCHITECTURE
-    The layout decides the convolution, and `build_model` picks by reading the
-    rank of one sample. You never name the architecture directly; you choose the
-    data layout (`as_channels` in `make_dataset`) and this follows.
-
-        rank 4 (K, H, W, 1) -> a 3D CNN. The slices are a depth axis the kernels
-            move through, so the model can see across slices.
-        rank 3 (H, W, K)    -> a 2.5D CNN. The slices are channels, so every
-            kernel already sees all 24 at once but the model has no notion of
-            slice order. Far cheaper to train, which is the trade.
-
-TWO THINGS THAT WERE IN THE FIRST DRAFT AND ARE DELIBERATELY GONE
-    TimeDistributed is dropped. It exists to apply a layer at every step of a
-    TIME axis, and there is no time axis here. Wrapped around the pooling it made
-    Keras read the 24 slices as time and hand a rank-4 slice to a 3D pool; wrapped
-    around the last Dense it produced (B, T, 12) against labels of (B, 12).
-
-    The duplicated Dense(20) is chained, not parallel. Both lines read
-    `shared_feature`, so the second overwrote the first and one layer was
-    silently dropped. See `classification_head`.
-"""
 import tensorflow as tf
 from tensorflow.keras import layers, models
 
 from functions.labels import LABELS
+
+LABEL_THRESHOLD = 0.5
+
+def _hard(y_true, y_pred):
+    return tf.cast(y_true > LABEL_THRESHOLD, y_pred.dtype)
+
+
+@tf.keras.utils.register_keras_serializable(package="stk")
+class SoftAUC(tf.keras.metrics.AUC):
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
+
+
+@tf.keras.utils.register_keras_serializable(package="stk")
+class SoftBinaryAccuracy(tf.keras.metrics.BinaryAccuracy):
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
+
+
+@tf.keras.utils.register_keras_serializable(package="stk")
+class SoftRecall(tf.keras.metrics.Recall):
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
+
+
+@tf.keras.utils.register_keras_serializable(package="stk")
+class SoftPrecision(tf.keras.metrics.Precision):
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        return super().update_state(_hard(y_true, y_pred), y_pred, sample_weight)
 
 
 def build_model_3d(input_shape, n_labels):
@@ -120,6 +106,64 @@ def classification_head(features, n_labels):
     return layers.Dense(n_labels, activation="sigmoid")(net)
 
 
+def _encode_3d(inputs):
+    """The 3-block Conv3D stack shared by the single- and multi-plane models:
+    (K, H, W, 1) -> (64,) pooled features. Fresh layers per call, so each plane
+    in the multi-plane model learns its own filters -- sagittal anatomy and
+    axial anatomy do not look alike."""
+    net = layers.Conv3D(32, 3, padding="same", activation="relu")(inputs)
+    net = layers.MaxPooling3D(pool_size=(1, 2, 2), padding="same")(net)
+    net = layers.Conv3D(64, 3, padding="same", activation="relu")(net)
+    net = layers.MaxPooling3D(pool_size=(2, 2, 2), padding="same")(net)
+    net = layers.Conv3D(64, 3, padding="same", activation="relu")(net)
+    net = layers.MaxPooling3D(pool_size=(2, 2, 2), padding="same")(net)
+    return layers.GlobalAveragePooling3D()(net)
+
+
+def build_model_multiplane(input_shape, n_labels=len(LABELS)):
+    """Three volumes of ONE study -- sagittal, coronal, axial -- one prediction.
+
+    Every study in the dataset has all three planes (verified: 4,407/4,407),
+    so each training step reads the same knee from three directions and the
+    head learns from the fused 192 features. This is the fusion upgrade of the
+    per-plane-ensemble idea: instead of averaging three opinions after the
+    fact, the planes inform each other during training.
+
+    input_shape is ONE plane's per-sample shape, (K, H, W, 1); all three share it.
+    """
+    plane_inputs = [layers.Input(shape=input_shape, name=f"plane_{name}")
+                    for name in ("sagittal", "coronal", "axial")]
+    fused = layers.Concatenate()([_encode_3d(inp) for inp in plane_inputs])
+    return models.Model(inputs=plane_inputs,
+                        outputs=classification_head(fused, n_labels))
+
+
+def build_model_fusion(input_shape, text_dim, n_labels=len(LABELS)):
+    """The capstone: one study's THREE image planes PLUS its report -> labels.
+
+    Late fusion (averaging the two finished models) already scores 0.877 on
+    gold against 0.683/0.855 for the parents -- the modalities are strongly
+    complementary. This model goes one step further: the image encoders and
+    the text branch train JOINTLY, so the head learns per-finding trust (read
+    Effusion off the pixels, ACL off the words) instead of a fixed vote.
+
+    Inputs: three (K, H, W, 1) volumes + one (text_dim,) TF-IDF vector from
+    the report model's fitted vectorizer. All TensorFlow -- no torch anywhere.
+    """
+    plane_inputs = [layers.Input(shape=input_shape, name=f"plane_{name}")
+                    for name in ("sagittal", "coronal", "axial")]
+    text_input = layers.Input(shape=(text_dim,), name="report_tfidf")
+
+    image_features = [_encode_3d(inp) for inp in plane_inputs]        # 3 x (64,)
+    text = layers.Dense(256, activation="relu")(text_input)
+    text = layers.Dropout(0.4)(text)
+    text = layers.Dense(64, activation="relu")(text)                  # (64,)
+
+    fused = layers.Concatenate()(image_features + [text])             # (256,)
+    return models.Model(inputs=plane_inputs + [text_input],
+                        outputs=classification_head(fused, n_labels))
+
+
 def build_model(input_shape, n_labels=len(LABELS)):
     """One sample's shape -> a compile-ready model.
 
@@ -145,15 +189,20 @@ def compile_model(model):
     binary_crossentropy, not categorical: it scores each of the 12 sigmoid outputs
     on its own, which is what "several findings at once" needs. It also takes soft
     targets (floats in [0, 1]) unchanged, which is what the derived labels are.
+
+    The metrics are the Soft* wrappers above, not the stock classes, because the
+    training targets are soft -- see the comment block at LABEL_THRESHOLD. The
+    names ("auc" etc.) are load-bearing: train_model's callbacks monitor
+    "val_auc" by that exact string.
     """
     model.compile(
         optimizer="adam",
         loss="binary_crossentropy",
         metrics=[
-            "accuracy",
-            tf.keras.metrics.AUC(name="auc"),
-            tf.keras.metrics.Recall(name="recall"),
-            tf.keras.metrics.Precision(name="precision"),
+            SoftBinaryAccuracy(name="accuracy"),
+            SoftAUC(name="auc"),
+            SoftRecall(name="recall"),
+            SoftPrecision(name="precision"),
         ],
     )
     return model

@@ -233,3 +233,7 @@ __marimo__/
 #personal sandbox
 niko_work.txt
 david_not_public
+
+# macOS Finder droppings (were tracked at the repo root once already)
+.DS_Store
+models/*.joblib

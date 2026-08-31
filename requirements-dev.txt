@@ -1,0 +1,29 @@
+# Local development: notebooks, plots, linting.
+# Installs the runtime deps too, so one command sets up a working env:
+#     pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+jupyterlab==4.6.3
+ipykernel==7.3.0
+matplotlib==3.10.9
+
+pylint==4.0.7
+
+# --- 3D viewer (functions/dicom_3d.py) --------------------------------------
+# Dev-only: nothing in the API imports it, so none of this enters the Docker
+# image. scipy is already a transitive dep of scikit-learn; pinned here because
+# dicom_3d imports it DIRECTLY.
+plotly==5.24.1
+scipy==1.15.3
+scikit-image==0.25.2
+
+# --- notebooks --------------------------------------------------------------
+seaborn==0.13.2
+deep-translator==1.11.4
+langdetect==1.0.9
+import-ipynb==0.2.1
+
+# Kevin's NLP / MONAI notebooks additionally need (heavy, several GB -- install
+# on demand, versions unpinned until his work merges):
+#   torch  monai  spacy  scispacy  medspacy

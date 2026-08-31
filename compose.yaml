@@ -1,0 +1,60 @@
+services:
+  # The serving container -- same image that goes to Artifact Registry.
+  api:
+    build: .
+    image: stk-api:latest           # reuse the locally built tag instead of a second build
+    ports: ["8000:8080"]
+    restart: always                 # a laptop-hosted server: come back after ANY daemon restart, incl. Docker Desktop quitting
+    environment:
+      # OFF while the tunnel below can expose this API to the internet:
+      # /predict/path reads server-side paths and must not be public. Flip to
+      # "1" for purely local use (nothing else changes).
+      ALLOW_LOCAL_PATHS: "0"
+    volumes:
+      - ./models:/app/models:ro     # swap in trained weights without rebuilding
+      - ./data:/app/data:ro         # so /predict/path and /studies/* reach local data
+
+  # Public HTTPS access from anywhere, no router config, no cloud account:
+  # a Cloudflare quick tunnel. Outbound-only from this machine; the public URL
+  # is printed in the container log and CHANGES on every restart:
+  #     docker compose --profile public up -d tunnel
+  #     docker compose logs tunnel | grep trycloudflare
+  # Anyone with the URL can call the API (there is no auth) -- share it with
+  # the team, not the world.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://api:8080
+    depends_on: [api]
+    restart: always
+    profiles: ["public"]
+
+  # Local GPU training. Needs Docker Desktop WSL integration enabled.
+  # Blackwell (RTX 5080, sm_120) is why this uses the NGC image rather than a
+  # pip TensorFlow wheel.
+  train:
+    image: nvcr.io/nvidia/tensorflow:25.02-tf2-py3
+    gpus: all
+    # NVIDIA's own recommendation -- the default 64MB shm starves tf.data.
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    environment:
+      # The NGC image defaults tf.keras to legacy Keras 2, whose Python-3.12
+      # randint bug crashes the first Conv3D. Our code is Keras 3.
+      TF_USE_LEGACY_KERAS: "0"
+    working_dir: /app
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    # Reproduces the CANONICAL serving model: sagittal + augmentation (the
+    # recipe that took gold 0.683 -> 0.754). gold images live inside
+    # train_series; the derived table is the v4 blend from the Kaggle meta.
+    command: >
+      bash -c "pip install --no-cache-dir -q pydicom pandas
+      && python -m models.train_model --augment
+      --epochs 100 --patience 15
+      --gold-images data/train_series
+      --derived-labels data/meta/rsna-knee-llm-report-labels/llm_labels_v4_blend.csv
+      --checkpoint models/knee_findings.keras"
+    profiles: ["training"]          # docker compose --profile training up train
