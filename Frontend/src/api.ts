@@ -51,100 +51,100 @@ export type Report = {
 
 // ─── Mock data (remove once real API is connected) ────────────────────────────
 
-const MOCK_LABELS: Label[] = [
-  { id: "acl", name: "ACL Tear", description: "Rupture of the anterior cruciate ligament", severity: "High" },
-  { id: "meniscal", name: "Meniscal Tear", description: "Tear in the meniscus cartilage", severity: "Moderate" },
-  { id: "cartilage", name: "Cartilage Damage", description: "Degradation of articular cartilage", severity: "Moderate" },
-  { id: "edema", name: "Bone Edema", description: "Fluid accumulation in bone marrow", severity: "Low" },
-  { id: "pcl", name: "PCL Tear", description: "Posterior cruciate ligament injury", severity: "High" },
-  { id: "bakers", name: "Baker's Cyst", description: "Fluid-filled cyst behind the knee", severity: "Low" },
-];
+// const MOCK_LABELS: Label[] = [
+//   { id: "acl", name: "ACL Tear", description: "Rupture of the anterior cruciate ligament", severity: "High" },
+//   { id: "meniscal", name: "Meniscal Tear", description: "Tear in the meniscus cartilage", severity: "Moderate" },
+//   { id: "cartilage", name: "Cartilage Damage", description: "Degradation of articular cartilage", severity: "Moderate" },
+//   { id: "edema", name: "Bone Edema", description: "Fluid accumulation in bone marrow", severity: "Low" },
+//   { id: "pcl", name: "PCL Tear", description: "Posterior cruciate ligament injury", severity: "High" },
+//   { id: "bakers", name: "Baker's Cyst", description: "Fluid-filled cyst behind the knee", severity: "Low" },
+// ];
 
-const MOCK_PREDICTIONS: Prediction[] = [
-  { labelId: "acl", label: "ACL Tear", probability: 0.82, severity: "High" },
-  { labelId: "meniscal", label: "Meniscal Tear", probability: 0.61, severity: "Moderate" },
-  { labelId: "cartilage", label: "Cartilage Damage", probability: 0.38, severity: "Low" },
-  { labelId: "edema", label: "Bone Edema", probability: 0.27, severity: "Low" },
-];
+// const MOCK_PREDICTIONS: Prediction[] = [
+//   { labelId: "acl", label: "ACL Tear", probability: 0.82, severity: "High" },
+//   { labelId: "meniscal", label: "Meniscal Tear", probability: 0.61, severity: "Moderate" },
+//   { labelId: "cartilage", label: "Cartilage Damage", probability: 0.38, severity: "Low" },
+//   { labelId: "edema", label: "Bone Edema", probability: 0.27, severity: "Low" },
+// ];
 
-const MOCK_STUDIES: Study[] = [
-  {
-    id: "study-001",
-    patientName: "Sarah Mitchell",
-    patientAge: "34Y",
-    patientSex: "F",
-    studyDate: "2026-08-24",
-    accessionNumber: "MRI-2026-08241",
-    bodyPart: "Right Knee",
-    seriesCount: 4,
-    status: "pending",
-    primaryFinding: "Suspected ACL Tear (82%)",
-    predictions: MOCK_PREDICTIONS,
-    report: null,
-  },
-  {
-    id: "study-002",
-    patientName: "James Cooper",
-    patientAge: "41Y",
-    patientSex: "M",
-    studyDate: "2026-08-22",
-    accessionNumber: "MRI-2026-08221",
-    bodyPart: "Left Knee",
-    seriesCount: 3,
-    status: "urgent",
-    primaryFinding: "Meniscal Tear (74%)",
-    predictions: [
-      { labelId: "meniscal", label: "Meniscal Tear", probability: 0.74, severity: "Moderate" },
-      { labelId: "edema", label: "Bone Edema", probability: 0.52, severity: "Low" },
-    ],
-    report: null,
-  },
-  {
-    id: "study-003",
-    patientName: "Amara Osei",
-    patientAge: "28Y",
-    patientSex: "F",
-    studyDate: "2026-08-19",
-    accessionNumber: "MRI-2026-08191",
-    bodyPart: "Right Knee",
-    seriesCount: 6,
-    status: "reviewed",
-    primaryFinding: "No significant finding",
-    predictions: [
-      { labelId: "cartilage", label: "Cartilage Damage", probability: 0.18, severity: "Low" },
-    ],
-    report: {
-      clinicalImpression: "No acute ligamentous injury. Mild chondral thinning noted.",
-      recommendation: "Conservative management. Physiotherapy referral.",
-      urgency: "Routine",
-      doctorName: "Dr. James Okafor",
-      submittedAt: "2026-08-20T09:14:00Z",
-    },
-  },
-  {
-    id: "study-004",
-    patientName: "Liu Wei",
-    patientAge: "55Y",
-    patientSex: "M",
-    studyDate: "2026-08-15",
-    accessionNumber: "MRI-2026-08151",
-    bodyPart: "Left Knee",
-    seriesCount: 4,
-    status: "reviewed",
-    primaryFinding: "Cartilage Damage (61%)",
-    predictions: [
-      { labelId: "cartilage", label: "Cartilage Damage", probability: 0.61, severity: "Moderate" },
-      { labelId: "edema", label: "Bone Edema", probability: 0.44, severity: "Low" },
-    ],
-    report: {
-      clinicalImpression: "Grade III chondral lesion on medial femoral condyle.",
-      recommendation: "Orthopaedic consultation for possible microfracture procedure.",
-      urgency: "Urgent",
-      doctorName: "Dr. James Okafor",
-      submittedAt: "2026-08-16T14:32:00Z",
-    },
-  },
-];
+// const MOCK_STUDIES: Study[] = [
+//   {
+//     id: "study-001",
+//     patientName: "Sarah Mitchell",
+//     patientAge: "34Y",
+//     patientSex: "F",
+//     studyDate: "2026-08-24",
+//     accessionNumber: "MRI-2026-08241",
+//     bodyPart: "Right Knee",
+//     seriesCount: 4,
+//     status: "pending",
+//     primaryFinding: "Suspected ACL Tear (82%)",
+//     predictions: MOCK_PREDICTIONS,
+//     report: null,
+//   },
+//   {
+//     id: "study-002",
+//     patientName: "James Cooper",
+//     patientAge: "41Y",
+//     patientSex: "M",
+//     studyDate: "2026-08-22",
+//     accessionNumber: "MRI-2026-08221",
+//     bodyPart: "Left Knee",
+//     seriesCount: 3,
+//     status: "urgent",
+//     primaryFinding: "Meniscal Tear (74%)",
+//     predictions: [
+//       { labelId: "meniscal", label: "Meniscal Tear", probability: 0.74, severity: "Moderate" },
+//       { labelId: "edema", label: "Bone Edema", probability: 0.52, severity: "Low" },
+//     ],
+//     report: null,
+//   },
+//   {
+//     id: "study-003",
+//     patientName: "Amara Osei",
+//     patientAge: "28Y",
+//     patientSex: "F",
+//     studyDate: "2026-08-19",
+//     accessionNumber: "MRI-2026-08191",
+//     bodyPart: "Right Knee",
+//     seriesCount: 6,
+//     status: "reviewed",
+//     primaryFinding: "No significant finding",
+//     predictions: [
+//       { labelId: "cartilage", label: "Cartilage Damage", probability: 0.18, severity: "Low" },
+//     ],
+//     report: {
+//       clinicalImpression: "No acute ligamentous injury. Mild chondral thinning noted.",
+//       recommendation: "Conservative management. Physiotherapy referral.",
+//       urgency: "Routine",
+//       doctorName: "Dr. James Okafor",
+//       submittedAt: "2026-08-20T09:14:00Z",
+//     },
+//   },
+//   {
+//     id: "study-004",
+//     patientName: "Liu Wei",
+//     patientAge: "55Y",
+//     patientSex: "M",
+//     studyDate: "2026-08-15",
+//     accessionNumber: "MRI-2026-08151",
+//     bodyPart: "Left Knee",
+//     seriesCount: 4,
+//     status: "reviewed",
+//     primaryFinding: "Cartilage Damage (61%)",
+//     predictions: [
+//       { labelId: "cartilage", label: "Cartilage Damage", probability: 0.61, severity: "Moderate" },
+//       { labelId: "edema", label: "Bone Edema", probability: 0.44, severity: "Low" },
+//     ],
+//     report: {
+//       clinicalImpression: "Grade III chondral lesion on medial femoral condyle.",
+//       recommendation: "Orthopaedic consultation for possible microfracture procedure.",
+//       urgency: "Urgent",
+//       doctorName: "Dr. James Okafor",
+//       submittedAt: "2026-08-16T14:32:00Z",
+//     },
+//   },
+// ];
 
 // ─── API methods ──────────────────────────────────────────────────────────────
 
@@ -154,11 +154,9 @@ export const api = {
    * Returns all studies stored in the database.
    */
   async getStudies(): Promise<Study[]> {
-    // TODO: const res = await fetch(`${API_BASE_URL}/studies`);
-    // TODO: if (!res.ok) throw new Error("Failed to fetch studies");
-    // TODO: return res.json();
-    await new Promise((r) => setTimeout(r, 600)); // simulate network
-    return MOCK_STUDIES;
+    const res = await fetch(`${API_BASE_URL}/studies`);
+    if (!res.ok) throw new Error("Failed to fetch studies");
+    return res.json();
   },
 
   /**
@@ -167,11 +165,9 @@ export const api = {
    * Load once on app start and cache.
    */
   async getLabels(): Promise<Label[]> {
-    // TODO: const res = await fetch(`${API_BASE_URL}/labels`);
-    // TODO: if (!res.ok) throw new Error("Failed to fetch labels");
-    // TODO: return res.json();
-    await new Promise((r) => setTimeout(r, 200));
-    return MOCK_LABELS;
+    const res = await fetch(`${API_BASE_URL}/labels`);
+    if (!res.ok) throw new Error("Failed to fetch labels");
+    return res.json();
   },
 
   /**
@@ -180,14 +176,11 @@ export const api = {
    * Files are sent as multipart/form-data under the key "files".
    */
   async predict(files: File[]): Promise<Prediction[]> {
-    // TODO:
-    // const form = new FormData();
-    // files.forEach((f) => form.append("files", f));
-    // const res = await fetch(`${API_BASE_URL}/predict`, { method: "POST", body: form });
-    // if (!res.ok) throw new Error("Prediction failed");
-    // return res.json();
-    await new Promise((r) => setTimeout(r, 1200)); // simulate inference
-    return MOCK_PREDICTIONS;
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f));
+    const res = await fetch(`${API_BASE_URL}/predict`, { method: "POST", body: form });
+    if (!res.ok) throw new Error("Prediction failed");
+    return res.json();
   },
 
   /**
@@ -229,13 +222,11 @@ export const api = {
    * Saves a doctor's clinical report for a study.
    */
   async saveReport(studyId: string, report: Report): Promise<void> {
-    // TODO:
-    // const res = await fetch(`${API_BASE_URL}/studies/${studyId}/report`, {
-    //   method: "POST",
-    //   headers: { "Content-Type": "application/json" },
-    //   body: JSON.stringify(report),
-    // });
-    // if (!res.ok) throw new Error("Failed to save report");
-    console.log("[API] saveReport →", studyId, report);
+    const res = await fetch(`${API_BASE_URL}/studies/${studyId}/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(report),
+    });
+    if (!res.ok) throw new Error("Failed to save report");
   },
-};
+}
