@@ -237,3 +237,21 @@ david_not_public
 # macOS Finder droppings (were tracked at the repo root once already)
 .DS_Store
 models/*.joblib
+
+# ─── Node / frontend (was Frontend/.gitignore; hoisted here so the repo has one) ──
+node_modules/
+.cache/
+.vite/
+vite.config.*.timestamp-*
+*.tsbuildinfo
+*-debug.log*
+logs/
+.claude-replay.*
+.tmp-*
+
+# Env files are ignored above; the checked-in template is not.
+!.env.example
+
+# Platform-managed agentplat state, not project source.
+/.plugins/
+/.opencode-skills/
