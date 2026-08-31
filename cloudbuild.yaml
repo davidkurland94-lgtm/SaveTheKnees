@@ -1,0 +1,85 @@
+# One-command build + deploy:
+#     gcloud builds submit --config cloudbuild.yaml
+#
+# Substitutions are overridable per-run:
+#     gcloud builds submit --config cloudbuild.yaml --substitutions=_TAG=v2
+#
+# NOTHING SECRET GOES IN THIS FILE. It is committed to a public repo. Project
+# ids, bucket names and regions are fine (they are not credentials); API keys,
+# service-account JSON and passwords are not -- those belong in Secret Manager,
+# referenced by name via --set-secrets.
+
+substitutions:
+  _REGION: us-central1            # same continent as the US buckets: see the
+                                  # note in the deploy step below
+  _REPO: stk
+  _SERVICE: stk-api
+  _TAG: v1
+  _DATA_BUCKET: savetheknees-images
+  _MODEL_BUCKET: savetheknees-models
+  _ALLOWED_ORIGINS: "*"           # pin to the front end's domain once it exists
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+images:
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_TAG}
+
+steps:
+  # 1. Build. --cache-from lets an unchanged requirements.txt reuse the
+  #    previous image's pip layer instead of reinstalling TensorFlow.
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    args:
+      - build
+      - -f
+      - Dockerfile.serving
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_TAG}
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest
+      - --cache-from
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest
+      - .
+
+  # 2. Push both tags. `images:` above would push at the end, but the deploy
+  #    step needs the tag to already exist.
+  - name: gcr.io/cloud-builders/docker
+    id: push
+    args: [push, --all-tags,
+           "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}"]
+
+  # 3. Deploy.
+  #
+  #    --memory 4Gi is not negotiable: TensorFlow does not fit in the 512Mi
+  #    default and the container dies on import.
+  #
+  #    --timeout 300 covers a cold start that loads the model.
+  #
+  #    The dataset mount is read-only -- nothing should ever write to the
+  #    corpus. WRITE_ROOT points at the container's own writable /tmp instead,
+  #    which is EPHEMERAL: see the comment on WRITE_ROOT in serving/my_api.py
+  #    before letting the front end depend on uploads persisting.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_TAG}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=4Gi
+      - --cpu=2
+      - --timeout=300
+      - --concurrency=8
+      - --max-instances=3
+      - --add-volume=name=data,type=cloud-storage,bucket=${_DATA_BUCKET},readonly=true
+      - --add-volume-mount=volume=data,mount-path=/mnt/data
+      - --add-volume=name=models,type=cloud-storage,bucket=${_MODEL_BUCKET},readonly=true
+      - --add-volume-mount=volume=models,mount-path=/mnt/models
+      - --set-env-vars=DATA_ROOT=/mnt/data,MODEL_PATH=/mnt/models/knee_findings.keras,WRITE_ROOT=/tmp/stk,ALLOWED_ORIGINS=${_ALLOWED_ORIGINS}
+
+timeout: 2400s

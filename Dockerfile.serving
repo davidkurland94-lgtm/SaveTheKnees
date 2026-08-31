@@ -1,0 +1,38 @@
+# Serving image for Cloud Run: CPU-only, which is all Cloud Run offers.
+FROM python:3.10-slim
+
+# libgomp1 is TensorFlow's OpenMP runtime. The wheel does not bundle it and
+# `import tensorflow` fails without it on -slim. Do not drop this line.
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TF_CPP_MIN_LOG_LEVEL=2 \
+    KERAS_HOME=/opt/keras \
+    PORT=8080
+
+WORKDIR /app
+
+# Dependencies first: editing our own code below must not re-run this layer.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY functions/ functions/
+COPY serving/ serving/
+COPY models/ models/
+
+# Never run as root in a container that faces the internet. KERAS_HOME is
+# created here too: /opt is root-owned, so without this the `app` user cannot
+# write keras.json and the env var above silently does nothing.
+RUN useradd --create-home --uid 1000 app \
+    && mkdir -p /opt/keras \
+    && chown -R app:app /app /opt/keras
+USER app
+
+EXPOSE 8080
+
+# JSON form so signals reach uvicorn, wrapping sh -c so Cloud Run's injected
+# $PORT is expanded. `exec` replaces the shell, keeping uvicorn as PID 1 --
+# without it, Cloud Run's shutdown signal goes to sh and never to the server.
+CMD ["sh", "-c", "exec uvicorn serving.my_api:app --host 0.0.0.0 --port ${PORT}"]

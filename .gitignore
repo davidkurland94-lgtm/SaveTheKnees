@@ -237,3 +237,12 @@ david_not_public
 # macOS Finder droppings (were tracked at the repo root once already)
 .DS_Store
 models/*.joblib
+
+# GCP credentials -- a leaked service-account key is a live door into the
+# project. Never commit one; prefer `gcloud auth` and Workload Identity, which
+# issue no long-lived file at all.
+*-key.json
+service-account*.json
+gcp-credentials*.json
+application_default_credentials.json
+*.pem
