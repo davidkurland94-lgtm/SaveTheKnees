@@ -33,10 +33,15 @@ export interface ViewerStack {
   /** Unique within the array; the series UID is the natural choice. */
   id: string;
   slices: ViewerSlice[];
-  /** Acquisition plane, when the page knows it. Labels the axis tab. */
+  /** Acquisition plane, when the page knows it. Badges the stage. */
   plane?: Plane;
-  /** Series description, shown next to the tabs. */
+  /**
+   * Tab text; falls back to `plane`. A study with two series of one plane
+   * needs this to tell them apart, which `plane` alone cannot do.
+   */
   label?: string;
+  /** Sequence details, shown to the right of the tabs. */
+  description?: string;
   /**
    * `(slice, row, column)` spacing in millimetres, exactly as
    * `GET /view/{uid}/3d_image_sequence` reports it. Drives how deep the 3D

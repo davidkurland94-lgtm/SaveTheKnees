@@ -10,14 +10,14 @@ interface StackTabsProps {
   stacks: ViewerStack[];
   activeId: string;
   onSelect: (id: string) => void;
-  /** Right-aligned read-out, e.g. the series description. */
+  /** Right-aligned read-out, e.g. the sequence details. */
   detail?: string;
 }
 
 /**
- * The axis picker. A study contributes one stack per plane, so these read as
- * Sagittal / Coronal / Axial tabs; a page passing several series of one plane
- * gets the series description as the label instead.
+ * The axis picker. A study contributing one stack per plane reads as Sagittal /
+ * Coronal / Axial tabs; where a plane repeats, the page disambiguates through
+ * each stack's `label`.
  */
 export function StackTabs({ stacks, activeId, onSelect, detail }: StackTabsProps) {
   return (
@@ -38,7 +38,7 @@ export function StackTabs({ stacks, activeId, onSelect, detail }: StackTabsProps
                 : "text-white/40 hover:bg-white/5 hover:text-white/70",
             )}
           >
-            {stack.plane ?? stack.label ?? `Series ${position + 1}`}
+            {stack.label ?? stack.plane ?? `Series ${position + 1}`}
           </button>
         );
       })}

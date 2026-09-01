@@ -211,6 +211,12 @@ export function get3dMesh(studyUid: string, options?: { seriesUid?: string; plan
   return requestJson<Mesh3DResponse>(`/view/${encode(studyUid)}/3d_image_sequence`, { query: { series_uid: options?.seriesUid, plane: options?.plane, downsample: options?.downsample }, signal });
 }
 
+/** `GET /view/{study_uid}/2d_image_sequence` - the contact sheet as a blob, for
+ * splitting back into slices with `lib/splitContactSheet`. */
+export function view2dSheet(studyUid: string, options?: { seriesUid?: string; plane?: Plane; columns?: number }, signal?: AbortSignal): Promise<Blob> {
+  return requestBlob(`/view/${encode(studyUid)}/2d_image_sequence`, { query: { series_uid: options?.seriesUid, plane: options?.plane, columns: options?.columns }, signal });
+}
+
 /** URL of `GET /view/{study_uid}/2d_image_sequence` - contact sheet PNG for <img src>. */
 export function view2dUrl(studyUid: string, options?: { seriesUid?: string; plane?: Plane; columns?: number }): string {
   return buildUrl(`/view/${encode(studyUid)}/2d_image_sequence`, { series_uid: options?.seriesUid, plane: options?.plane, columns: options?.columns });
@@ -254,6 +260,7 @@ export const api = {
   uploadImageSequence,
   getStudyInformation,
   get3dMesh,
+  view2dSheet,
   view2dUrl,
   createStudyReport,
   updateStudyReport,

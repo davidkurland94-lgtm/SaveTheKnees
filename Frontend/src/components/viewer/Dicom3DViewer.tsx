@@ -186,7 +186,7 @@ export function Dicom3DViewer({
         stacks={stacks}
         activeId={active?.id ?? ""}
         onSelect={setActiveId}
-        detail={active?.label}
+        detail={active?.description}
       />
 
       <div

@@ -1,11 +1,22 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { getStudy, getStudyLabels, predictStudy } from "@/api";
-import type { GoldenLabels, ModelName } from "@/interfaces";
-import { cn, joinParts, pluralize, shortUid, toFindings, useAsync } from "@/lib";
+import { getStudy, getStudyLabels, predictStudy, view2dSheet } from "@/api";
+import type { GoldenLabels, ModelName, Series, ViewerSlice, ViewerStack } from "@/interfaces";
+import {
+  closeSlices,
+  cn,
+  joinParts,
+  pluralize,
+  shortUid,
+  splitContactSheet,
+  toFindings,
+  useAsync,
+} from "@/lib";
 import { Chip, ErrorState, GoldenBadge, Icon, Loading, NavBar } from "@/components/ui";
 import ReportPanel from "@/components/studies/ReportPanel";
 import SeriesList from "@/components/studies/SeriesList";
+import Dicom2DViewer from "@/components/viewer/Dicom2DViewer";
+import Dicom3DViewer from "@/components/viewer/Dicom3DViewer";
 import FindingList from "@/components/viewer/FindingList";
 
 const MODELS: Array<{ id: ModelName; label: string; hint: string }> = [
@@ -33,7 +44,7 @@ export function StudyPage({ studyUid, onBack }: StudyPageProps) {
   const study = useAsync((signal) => getStudy(studyUid, signal), [studyUid]);
 
   return (
-    <div className="flex min-h-full flex-col bg-background">
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
       <NavBar onHome={onBack}>
         {study.data?.is_golden && <GoldenBadge />}
         <button
@@ -46,60 +57,195 @@ export function StudyPage({ studyUid, onBack }: StudyPageProps) {
         </button>
       </NavBar>
 
-      <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-8">
-        {study.loading ? (
-          <Loading label="Loading study…" />
-        ) : study.error ? (
-          <ErrorState message={study.error} onRetry={study.reload} />
-        ) : study.data ? (
-          <>
-            <header className="flex flex-col gap-2">
-              <h1 className="text-2xl text-foreground">Study {shortUid(studyUid, 16)}</h1>
-              <p className="break-all font-mono text-xs text-muted-foreground">{studyUid}</p>
-              <div className="mt-1 flex flex-wrap gap-2">
-                <Chip>{pluralize(study.data.n_series, "series", "series")}</Chip>
-                {Object.entries(study.data.planes).map(([plane, count]) => (
-                  <Chip key={plane}>
-                    {plane} × {count}
-                  </Chip>
-                ))}
-                {study.data.has_report && <Chip>has report</Chip>}
-              </div>
-            </header>
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        {/* The narrow rail: everything the study knows about itself. */}
+        <aside className="flex w-full shrink-0 flex-col gap-6 overflow-y-auto border-b border-border px-5 py-6 lg:w-1/5 lg:min-w-80 lg:max-w-sm lg:border-b-0 lg:border-r">
+          {study.loading ? (
+            <Loading label="Loading study…" />
+          ) : study.error ? (
+            <ErrorState message={study.error} onRetry={study.reload} />
+          ) : study.data ? (
+            <>
+              <header className="flex flex-col gap-2">
+                <h1 className="text-xl text-foreground">Study {shortUid(studyUid, 12)}</h1>
+                <p className="break-all font-mono text-[10px] text-muted-foreground">{studyUid}</p>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  <Chip>{pluralize(study.data.n_series, "series", "series")}</Chip>
+                  {Object.entries(study.data.planes).map(([plane, count]) => (
+                    <Chip key={plane}>
+                      {plane} × {count}
+                    </Chip>
+                  ))}
+                  {study.data.has_report && <Chip>has report</Chip>}
+                </div>
+              </header>
 
-            <nav className="flex gap-1 rounded-xl bg-muted p-1">
-              {TABS.map((entry) => {
-                const disabled = entry.id === "report" && !study.data?.has_report;
-                return (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => setTab(entry.id)}
-                    className={cn(
-                      "rounded-lg px-4 py-2 text-xs font-semibold transition-all",
-                      disabled && "cursor-not-allowed opacity-40",
-                      tab === entry.id
-                        ? "bg-white text-primary shadow-sm"
-                        : "text-muted-foreground hover:text-primary",
-                    )}
-                  >
-                    {entry.label}
-                  </button>
-                );
-              })}
-            </nav>
+              <nav className="flex flex-wrap gap-1 rounded-xl bg-muted p-1">
+                {TABS.map((entry) => {
+                  const disabled = entry.id === "report" && !study.data?.has_report;
+                  return (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => setTab(entry.id)}
+                      className={cn(
+                        "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
+                        disabled && "cursor-not-allowed opacity-40",
+                        tab === entry.id
+                          ? "bg-white text-primary shadow-sm"
+                          : "text-muted-foreground hover:text-primary",
+                      )}
+                    >
+                      {entry.label}
+                    </button>
+                  );
+                })}
+              </nav>
 
-            {tab === "model" && (
-              <ModelTab studyUid={studyUid} truth={study.data.golden_labels} />
-            )}
-            {tab === "labels" && <LabelsTab studyUid={studyUid} truth={study.data.golden_labels} />}
-            {tab === "report" && <ReportPanel studyUid={studyUid} />}
-            {tab === "series" && <SeriesList series={study.data.series} />}
-          </>
-        ) : null}
+              {tab === "model" && <ModelTab studyUid={studyUid} truth={study.data.golden_labels} />}
+              {tab === "labels" && (
+                <LabelsTab studyUid={studyUid} truth={study.data.golden_labels} />
+              )}
+              {tab === "report" && <ReportPanel studyUid={studyUid} />}
+              {tab === "series" && <SeriesList series={study.data.series} />}
+            </>
+          ) : null}
+        </aside>
+
+        {/* The wide column: both viewers, full height. */}
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3 xl:flex-row">
+          <SeriesViewers
+            studyUid={studyUid}
+            series={study.data?.series ?? []}
+            loading={study.loading}
+          />
+        </section>
       </div>
     </div>
+  );
+}
+
+/**
+ * One column of the sheet per request: `columns: 1` makes the tile size exactly
+ * the sheet width and the slice count exactly `height / width`, so nothing has
+ * to be assumed about how many slices came back.
+ */
+const SHEET_COLUMNS = 1;
+
+/** "Sagittal" on its own, but "Sagittal 1" / "Sagittal 2" when a plane repeats. */
+function planeLabels(series: Series[]): string[] {
+  const totals = new Map<string, number>();
+  for (const entry of series) totals.set(entry.plane, (totals.get(entry.plane) ?? 0) + 1);
+
+  const seen = new Map<string, number>();
+  return series.map((entry) => {
+    const nth = (seen.get(entry.plane) ?? 0) + 1;
+    seen.set(entry.plane, nth);
+    return (totals.get(entry.plane) ?? 0) > 1 ? `${entry.plane} ${nth}` : entry.plane;
+  });
+}
+
+function describeSeries(entry: Series): string {
+  return joinParts([
+    pluralize(entry.n_slices, "slice"),
+    entry.fluid_sensitive ? "fluid-sensitive" : null,
+    entry.fat_suppression ? "fat-sat" : null,
+  ]);
+}
+
+/**
+ * Owns every pixel the two viewers draw — they are UI only, so the fetching
+ * happens here.
+ *
+ * There is no per-slice image route: `/view/{uid}/2d_image_sequence` returns
+ * the 24 slices the model sees as a single contact sheet, which is fetched here
+ * and cut back apart. Only the selected series is loaded, since the server
+ * rebuilds each sheet from raw DICOM and that is slow, and sheets already seen
+ * are kept so flipping between tabs is instant.
+ */
+function SeriesViewers({
+  studyUid,
+  series,
+  loading,
+}: {
+  studyUid: string;
+  series: Series[];
+  loading: boolean;
+}) {
+  const available = series.filter((entry) => entry.available);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Falls back to the first series until one is picked, and again if the page
+  // swaps to a study that does not have the previously selected series.
+  const active =
+    available.find((entry) => entry.series_uid === selectedId) ?? available[0] ?? null;
+  const activeId = active?.series_uid ?? null;
+
+  const cache = useRef(new Map<string, ViewerSlice[]>());
+
+  const slices = useAsync(
+    async (signal) => {
+      if (!activeId) return [];
+      const cached = cache.current.get(activeId);
+      if (cached) return cached;
+
+      const sheet = await view2dSheet(
+        studyUid,
+        { seriesUid: activeId, columns: SHEET_COLUMNS },
+        signal,
+      );
+      const cut = await splitContactSheet(sheet, SHEET_COLUMNS);
+      cache.current.set(activeId, cut);
+      return cut;
+    },
+    [studyUid, activeId],
+  );
+
+  // ImageBitmaps hold native memory the GC is in no hurry to reclaim, and a
+  // five-series study caches 120 of them.
+  useEffect(() => {
+    const held = cache.current;
+    return () => {
+      for (const entry of held.values()) closeSlices(entry);
+      held.clear();
+    };
+  }, []);
+
+  const labels = planeLabels(available);
+  const stacks: ViewerStack[] = available.map((entry, position) => ({
+    id: entry.series_uid,
+    plane: entry.plane,
+    label: labels[position],
+    description: describeSeries(entry),
+    // Only the selected series has pixels; the rest are tabs waiting to be
+    // clicked, which is what keeps the page to one sheet request at a time.
+    slices: entry.series_uid === activeId ? (slices.data ?? []) : [],
+  }));
+
+  // The stacks are empty for three different reasons, and saying which one is
+  // the difference between "wait" and "this study has nothing to show".
+  const emptyLabel = loading
+    ? "Loading study…"
+    : slices.loading
+      ? "Building the contact sheet on the server…"
+      : (slices.error ??
+        (available.length === 0
+          ? "No series available for this study."
+          : "No slices for this series."));
+
+  const shared = {
+    stacks,
+    stackId: activeId ?? undefined,
+    onStackChange: setSelectedId,
+    emptyLabel,
+    className: "min-h-0 min-w-0 flex-1",
+  };
+
+  return (
+    <>
+      <Dicom2DViewer {...shared} />
+      <Dicom3DViewer {...shared} />
+    </>
   );
 }
 

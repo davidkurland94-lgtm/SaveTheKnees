@@ -107,7 +107,7 @@ export function Dicom2DViewer({
         stacks={stacks}
         activeId={active?.id ?? ""}
         onSelect={setActiveId}
-        detail={active?.label}
+        detail={active?.description}
       />
 
       <div
@@ -119,12 +119,16 @@ export function Dicom2DViewer({
         className="flex min-h-72 flex-1 items-center justify-center p-4 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent"
       >
         {slice && size ? (
-          <div className="relative flex max-h-full max-w-full">
+          // The canvas fills the stage and `object-contain` keeps the aspect,
+          // so a 224² sheet tile scales up instead of sitting at native size.
+          // Overlays pin to the stage corners, as viewport furniture rather
+          // than image annotations.
+          <div className="relative h-full w-full">
             <SliceCanvas
               image={slice.image}
               brightness={brightness}
               contrast={contrast}
-              className="max-h-full max-w-full rounded-sm object-contain"
+              className="h-full w-full rounded-sm object-contain"
             />
             <div className="pointer-events-none absolute left-3 top-3 flex flex-col items-start gap-1">
               {active?.plane && (
