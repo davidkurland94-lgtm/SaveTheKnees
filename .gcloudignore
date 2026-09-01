@@ -1,0 +1,42 @@
+# What `gcloud builds submit` uploads to Cloud Build.
+#
+# WITHOUT THIS FILE gcloud generates one from .gitignore -- which works by
+# accident here (data/ is gitignored) but is fragile: the day someone
+# un-ignores a data path, every build starts uploading gigabytes over the
+# network. Be explicit instead.
+#
+# NOTE: this is NOT the same as .dockerignore. This controls what leaves your
+# machine; .dockerignore controls what the Docker build can COPY. Both are
+# needed, and they should stay roughly in sync.
+
+.git/
+.gitignore
+
+# 17 GB. The container reads the dataset from a GCS bucket mount at runtime.
+data/
+
+# Local virtualenvs -- multi-GB and useless on a Linux builder.
+save-the-knees-env/
+.venv/
+venv/
+
+notebooks/
+Docs/
+david_not_public/
+api/
+
+**/__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+requirements-dev.txt
+*.md
+
+# Never upload local credentials to a build. See also .gitignore.
+.env
+*.json.key
+*-key.json
+service-account*.json

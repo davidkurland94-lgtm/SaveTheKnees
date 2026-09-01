@@ -17,6 +17,14 @@ scikit-learn==1.7.2       # back in the image: /predict/report loads the TF-IDF 
 joblib==1.5.3             # direct import (vectorizer load); would come via sklearn, pinned because we call it
 pydantic==2.13.4          # direct import (api request models); would come via fastapi, pinned because we call it
 
+# --- 3d ------------------------------------------------------------------
+# /view/{uid}/3d_image_sequence builds a marching-cubes isosurface. These were
+# dev-only extras; they are runtime deps now that the route ships. Drop these
+# three (and accept the route's 503) if image size becomes a problem.
+scipy==1.15.3
+scikit-image==0.25.2
+plotly==7.0.0             # functions/dicom_3d.py imports it at module level
+
 # --- api -----------------------------------------------------------------
 fastapi==0.141.1
 uvicorn[standard]==0.52.4

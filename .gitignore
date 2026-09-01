@@ -238,6 +238,14 @@ david_not_public
 .DS_Store
 models/*.joblib
 
+# GCP credentials -- a leaked service-account key is a live door into the
+# project. Never commit one; prefer `gcloud auth` and Workload Identity, which
+# issue no long-lived file at all.
+*-key.json
+service-account*.json
+gcp-credentials*.json
+application_default_credentials.json
+*.pem
 # ─── Node / frontend (was Frontend/.gitignore; hoisted here so the repo has one) ──
 node_modules/
 .cache/
