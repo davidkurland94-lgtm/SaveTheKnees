@@ -10,6 +10,8 @@ import type {
   CompareWhich,
   GoldenStudiesResponse,
   HealthResponse,
+  Mesh3DResponse,
+  ModelSummaryResponse,
   LabelResponse,
   ModelName,
   Plane,
@@ -20,9 +22,13 @@ import type {
   ReportTableResponse,
   SeriesListResponse,
   ServiceInfo,
+  StoredReportRecord,
+  StudiesListResponse,
   StudyDetail,
+  StudyInformation,
   StudyLabelsResponse,
   StudyPredictionResponse,
+  UploadSequenceResponse,
   VerdictsResponse,
 } from "@/interfaces";
 import { buildUrl, postJson, requestBlob, requestJson } from "./client";
@@ -41,7 +47,12 @@ export function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
   return requestJson<HealthResponse>("/health", { signal, timeoutMs: 15_000 });
 }
 
-// ─── Dataset ──────────────────────────────────────────────────────────────────
+// ─── Dataset ──────────────────────────────────────────────────────────────
+
+/** `GET /studies` — the full corpus, paginated (4,407 studies). */
+export function getStudies(limit = 100, offset = 0, signal?: AbortSignal): Promise<StudiesListResponse> {
+  return requestJson<StudiesListResponse>("/studies", { query: { limit, offset }, signal });
+}
 
 /** `GET /studies/golden` — the 58 hand-labelled studies, the only ground truth. */
 export function getGoldenStudies(signal?: AbortSignal): Promise<GoldenStudiesResponse> {
@@ -177,14 +188,54 @@ export function getReportVerdicts(top = 20, signal?: AbortSignal): Promise<Verdi
 }
 
 /** `GET /models/{name}/summary` — Keras layer table of a trained model, as text. */
-export function getModelSummary(name: string, signal?: AbortSignal): Promise<unknown> {
-  return requestJson<unknown>(`/models/${encode(name)}/summary`, { signal });
+export function getModelSummary(name: string, signal?: AbortSignal): Promise<ModelSummaryResponse> {
+  return requestJson<ModelSummaryResponse>(`/models/${encode(name)}/summary`, { signal });
+}
+
+// --- Uploads, views and user-written reports --------------------------------
+
+/** `POST /upload/{study_uid}/image_sequence` - store a new series server-side. */
+export function uploadImageSequence(studyUid: string, seriesUid: string, files: File[], signal?: AbortSignal): Promise<UploadSequenceResponse> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file, file.name);
+  return requestJson<UploadSequenceResponse>(`/upload/${encode(studyUid)}/image_sequence`, { method: "POST", query: { series_uid: seriesUid }, body: form, signal });
+}
+
+/** `GET /view/{study_uid}/information` - study + report + labels + stored report. */
+export function getStudyInformation(studyUid: string, signal?: AbortSignal): Promise<StudyInformation> {
+  return requestJson<StudyInformation>(`/view/${encode(studyUid)}/information`, { signal });
+}
+
+/** `GET /view/{study_uid}/3d_image_sequence` - marching-cubes mesh (tens of MB). */
+export function get3dMesh(studyUid: string, options?: { seriesUid?: string; plane?: Plane; downsample?: number }, signal?: AbortSignal): Promise<Mesh3DResponse> {
+  return requestJson<Mesh3DResponse>(`/view/${encode(studyUid)}/3d_image_sequence`, { query: { series_uid: options?.seriesUid, plane: options?.plane, downsample: options?.downsample }, signal });
+}
+
+/** URL of `GET /view/{study_uid}/2d_image_sequence` - contact sheet PNG for <img src>. */
+export function view2dUrl(studyUid: string, options?: { seriesUid?: string; plane?: Plane; columns?: number }): string {
+  return buildUrl(`/view/${encode(studyUid)}/2d_image_sequence`, { series_uid: options?.seriesUid, plane: options?.plane, columns: options?.columns });
+}
+
+/** `POST /create/{study_uid}/sequence_report` - 409 if one already exists. */
+export function createStudyReport(studyUid: string, text: string, author = "team", signal?: AbortSignal): Promise<StoredReportRecord> {
+  return postJson<StoredReportRecord>(`/create/${encode(studyUid)}/sequence_report`, { text, author }, { signal });
+}
+
+/** `PUT /update/{study_uid}/sequence_report` - 404 if there is nothing to replace. */
+export function updateStudyReport(studyUid: string, text: string, author = "team", signal?: AbortSignal): Promise<StoredReportRecord> {
+  return postJson<StoredReportRecord>(`/update/${encode(studyUid)}/sequence_report`, { text, author }, { signal, method: "PUT" });
+}
+
+/** `DELETE /delete/{study_uid}/sequence_report` */
+export function deleteStudyReport(studyUid: string, signal?: AbortSignal): Promise<{ deleted: string }> {
+  return requestJson<{ deleted: string }>(`/delete/${encode(studyUid)}/sequence_report`, { method: "DELETE", signal });
 }
 
 /** Namespaced handle for callers that prefer `api.getStudy(...)`. */
 export const api = {
   getServiceInfo,
   getHealth,
+  getStudies,
   getGoldenStudies,
   getStudy,
   getSeriesList,
@@ -200,4 +251,11 @@ export const api = {
   getReportCompare,
   getReportVerdicts,
   getModelSummary,
+  uploadImageSequence,
+  getStudyInformation,
+  get3dMesh,
+  view2dUrl,
+  createStudyReport,
+  updateStudyReport,
+  deleteStudyReport,
 };
