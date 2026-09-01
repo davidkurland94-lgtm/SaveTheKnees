@@ -1,0 +1,92 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Outfit:wght@300;400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+/*
+ * Tailwind v4 theme. Every `--color-*` here becomes a utility (`bg-primary`,
+ * `text-muted-foreground`, `border-border`, …) and every `--font-*` becomes a
+ * font utility (`font-sans`, `font-serif`). Components use these tokens rather
+ * than raw hex so the palette lives in exactly one place.
+ */
+@theme {
+  --color-background: #ffffff;
+  --color-foreground: #1a1523;
+
+  --color-card: #faf9ff;
+  --color-card-foreground: #1a1523;
+
+  --color-primary: #7c3aed;
+  --color-primary-hover: #6d28d9;
+  --color-primary-foreground: #ffffff;
+
+  --color-secondary: #ede9fe;
+  --color-secondary-foreground: #4c1d95;
+
+  --color-muted: #f5f3ff;
+  --color-muted-foreground: #6d5da8;
+  --color-subtle: #b5a9d4;
+
+  --color-accent: #a78bfa;
+  --color-accent-foreground: #2e1065;
+  --color-accent-soft: #c4b5fd;
+
+  --color-border: #e9e4f8;
+  --color-border-soft: #f0edfb;
+  --color-ring: #a78bfa;
+
+  /* The image viewer is deliberately dark so scans read correctly. */
+  --color-viewer: #080810;
+  --color-viewer-panel: #0d0d18;
+
+  --font-sans: 'Outfit', system-ui, sans-serif;
+  --font-serif: 'DM Serif Display', Georgia, serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}
+
+/* Headings use the display face; opt in with `font-serif` elsewhere. */
+h1,
+h2,
+h3 {
+  font-family: var(--font-serif);
+  font-weight: 400;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-accent-soft) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-accent-soft);
+  border-radius: 4px;
+}
+
+/* Respect users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
