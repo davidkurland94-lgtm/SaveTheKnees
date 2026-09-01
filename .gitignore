@@ -33,6 +33,10 @@ var/
 wheels/
 share/python-wheels/
 *.egg-info/
+
+# ...but `lib/` above is a Python packaging rule, and it was also swallowing the
+# frontend's own source directory, so Frontend/src/lib was never committed.
+!Frontend/src/lib/
 .installed.cfg
 *.egg
 MANIFEST
