@@ -28,9 +28,28 @@ from functions.catalog import DataUnavailable
 from functions.labels import LABELS
 from functions.sequence_to_tensor import AXIS_PLANE, sequence_to_tensor
 
+OPENAPI_TAGS = [
+    {"name": "health", "description": "Liveness and dataset visibility."},
+    {"name": "studies", "description": "Read-only browsing of the corpus: "
+     "studies, reports, labels, series, tensors, previews."},
+    {"name": "predict", "description": "The trained models. Three entry points, three cases: "
+     "**a study already in the dataset** -> GET /studies/{uid}/predict?model= (sagittal | multiplane | fusion); "
+     "**a NEW series you upload** -> POST /predict; "
+     "**raw report text** -> POST /predict/report."},
+    {"name": "evaluation", "description": "The referee: every reader scored on the 58 gold "
+     "studies, verdict sheets, model cards. What models_pipe.ipynb reads remotely."},
+    {"name": "upload", "description": "Add new DICOM series (stored under WRITE_ROOT)."},
+    {"name": "views", "description": "Rendering: 3D mesh, 2D contact sheet, study information."},
+    {"name": "reports", "description": "User-WRITTEN reports (create/update/delete) -- not the "
+     "dataset's radiology reports, those live under /studies/{uid}/report."},
+]
+
 app = FastAPI(
     title="Save the Knees",
-    description="Knee MRI in, twelve finding probabilities out.",
+    description="Knee MRI in, twelve finding probabilities out. "
+                "Sections read top to bottom: check health, browse studies, "
+                "run a predict, audit the models in evaluation.",
+    openapi_tags=OPENAPI_TAGS,
 )
 
 # The front end is served from a different origin, so without this the browser
@@ -45,7 +64,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
+@app.get("/", tags=["health"])
 def root():
     """Cloud Run health checks and curious humans both land here."""
     return {"service": "save-the-knees", "docs": "/docs", "health": "/health"}
@@ -193,7 +212,7 @@ def now() -> str:
 # Health
 # ---------------------------------------------------------------------------
 
-@app.get("/health")
+@app.get("/health", tags=["health"])
 def health():
     """Is the process up, and can it see the dataset?"""
     try:
@@ -210,7 +229,7 @@ def health():
 # otherwise FastAPI matches the literal "golden" as a study UID.
 # ---------------------------------------------------------------------------
 
-@app.get("/studies", tags=["dataset"])
+@app.get("/studies", tags=["studies"])
 def list_studies(limit: int = Query(100, ge=1, le=1000),
                  offset: int = Query(0, ge=0)):
     """Every study in the corpus, paginated (4,407 rows -- never dumped whole).
@@ -228,20 +247,20 @@ def list_studies(limit: int = Query(100, ge=1, le=1000),
                         for uid, row in page.iterrows()]}
 
 
-@app.get("/studies/golden", tags=["dataset"])
+@app.get("/studies/golden", tags=["studies"])
 def list_golden():
     """The 58 hand-labelled studies -- the only ground truth in the dataset."""
     rows = guard(catalog.golden_studies)
     return {"count": len(rows), "labels": LABELS, "studies": rows}
 
 
-@app.get("/studies/{study_uid}", tags=["dataset"])
+@app.get("/studies/{study_uid}", tags=["studies"])
 def get_study(study_uid: str):
     """One study's record, its series inline."""
     return require_study(study_uid)
 
 
-@app.get("/studies/{study_uid}/report", tags=["dataset"])
+@app.get("/studies/{study_uid}/report", tags=["studies"])
 def get_dataset_report(study_uid: str,
                        lang: str = Query("original", pattern="^(original|en)$")):
     """The radiologist's report from the dataset (NOT a user-written one).
@@ -259,7 +278,7 @@ def get_dataset_report(study_uid: str,
     return report
 
 
-@app.get("/studies/{study_uid}/labels", tags=["dataset"])
+@app.get("/studies/{study_uid}/labels", tags=["studies"])
 def get_labels(study_uid: str):
     """All twelve pilkwang labels: probability, confidence, YES/NO/UNK verdict."""
     labels = guard(catalog.get_labels, study_uid)
@@ -268,7 +287,7 @@ def get_labels(study_uid: str):
     return labels
 
 
-@app.get("/studies/{study_uid}/labels/{label}", tags=["dataset"])
+@app.get("/studies/{study_uid}/labels/{label}", tags=["studies"])
 def get_label(study_uid: str, label: str):
     """One label. Accepts the slug ("medial-meniscus", "bakers") or exact name."""
     if catalog.resolve_label(label) is None:
@@ -279,7 +298,7 @@ def get_label(study_uid: str, label: str):
     return result
 
 
-@app.get("/studies/{study_uid}/predict", tags=["dataset"])
+@app.get("/studies/{study_uid}/predict", tags=["studies"])
 def predict_with_model(study_uid: str,
                        model: str = Query("fusion", pattern="^(sagittal|multiplane|fusion)$")):
     """Run one of OUR trained models on a study by UID.
@@ -302,7 +321,7 @@ def predict_with_model(study_uid: str,
     return {"study_uid": study_uid, "model": model, "predictions": result}
 
 
-@app.get("/studies/{study_uid}/series", tags=["dataset"])
+@app.get("/studies/{study_uid}/series", tags=["studies"])
 def list_series(study_uid: str,
                 plane: str | None = Query(None, description="Sagittal | Coronal | Axial")):
     """Every sequence of a study."""
@@ -313,7 +332,7 @@ def list_series(study_uid: str,
     return {"study_uid": study_uid, "count": len(rows), "series": rows}
 
 
-@app.get("/studies/{study_uid}/series/{series_uid}", tags=["dataset"])
+@app.get("/studies/{study_uid}/series/{series_uid}", tags=["studies"])
 def get_series(study_uid: str, series_uid: str):
     """One sequence: plane, acquisition flags, slice count, whether files exist."""
     record = guard(catalog.get_series, study_uid, series_uid)
@@ -322,7 +341,7 @@ def get_series(study_uid: str, series_uid: str):
     return record
 
 
-@app.get("/studies/{study_uid}/series/{series_uid}/tensor", tags=["dataset"])
+@app.get("/studies/{study_uid}/series/{series_uid}/tensor", tags=["studies"])
 def get_tensor(study_uid: str, series_uid: str):
     """The model-ready tensor as a .npy download: (24, 224, 224, 1) float32.
 
@@ -347,7 +366,7 @@ def get_tensor(study_uid: str, series_uid: str):
     )
 
 
-@app.get("/studies/{study_uid}/series/{series_uid}/preview.png", tags=["dataset"])
+@app.get("/studies/{study_uid}/series/{series_uid}/preview.png", tags=["studies"])
 def get_preview(study_uid: str, series_uid: str,
                 columns: int = Query(6, ge=1, le=24, description="montage width")):
     """A PNG contact sheet of the 24 sampled slices, for eyeballing a series."""
@@ -377,7 +396,7 @@ def get_preview(study_uid: str, series_uid: str,
 # Upload
 # ---------------------------------------------------------------------------
 
-@app.post("/upload/{study_uid}/image_sequence")
+@app.post("/upload/{study_uid}/image_sequence", tags=["upload"])
 async def upload_new_sequence(
     study_uid: str,
     series_uid: str = Query(..., description="Folder name to store the slices under."),
@@ -443,7 +462,7 @@ def resolve_series(study_uid: str, series_uid: str | None, plane: str | None):
     return match
 
 
-@app.get("/view/{study_uid}/3d_image_sequence")
+@app.get("/view/{study_uid}/3d_image_sequence", tags=["views"])
 def view_3d_sequence(
     study_uid: str,
     series_uid: str | None = None,
@@ -488,7 +507,7 @@ def view_3d_sequence(
     }
 
 
-@app.get("/view/{study_uid}/2d_image_sequence",
+@app.get("/view/{study_uid}/2d_image_sequence", tags=["views"],
          responses={200: {"content": {"image/png": {}}}})
 def view_2d_sequence(
     study_uid: str,
@@ -524,7 +543,7 @@ def view_2d_sequence(
     return Response(buffer.getvalue(), media_type="image/png")
 
 
-@app.get("/view/{study_uid}/information")
+@app.get("/view/{study_uid}/information", tags=["views"])
 def view_patient_information(study_uid: str):
     """Everything the dataset knows about the study: series, planes, whether it
     is one of the 58 gold-labelled ones, and any report I have stored."""
@@ -543,13 +562,18 @@ def view_patient_information(study_uid: str):
 # Predict
 # ---------------------------------------------------------------------------
 
-@app.get("/predict/{study_uid}", response_model=Prediction)
+@app.get("/predict/{study_uid}", response_model=Prediction, tags=["predict"],
+         deprecated=True)
 def predict(
     study_uid: str,
     axis: str = Query("X", pattern="^[XYZ]$",
                       description="X=Sagittal, Y=Coronal, Z=Axial."),
 ):
-    """Run the checkpointed image model over the study.
+    """DEPRECATED -- use GET /studies/{study_uid}/predict?model=sagittal.
+
+    Kept for the front end's transition. It builds its tensor from raw DICOM
+    on the server, so it only works where train_series/ (or an upload) exists
+    -- NOT on Cloud Run, whose bucket deliberately carries no raw DICOM.
 
     functions.predict.predict_study would be the one-liner here, but it builds
     its tensor through study_to_tensor, which hardcodes data/train_series/.
@@ -696,7 +720,7 @@ def model_summary(name: str):
 # My reports -- create / update / delete, backed by the JSON file above
 # ---------------------------------------------------------------------------
 
-@app.post("/create/{study_uid}/sequence_report",
+@app.post("/create/{study_uid}/sequence_report", tags=["reports"],
           response_model=StoredReport, status_code=201)
 def create_report(study_uid: str, body: ReportIn):
     """Write a new report. 409 if one already exists -- overwriting is PUT's
@@ -714,7 +738,8 @@ def create_report(study_uid: str, body: ReportIn):
     return record
 
 
-@app.put("/update/{study_uid}/sequence_report", response_model=StoredReport)
+@app.put("/update/{study_uid}/sequence_report", tags=["reports"],
+         response_model=StoredReport)
 def update_report(study_uid: str, body: ReportIn):
     """Replace an existing report. 404 if there is nothing to replace."""
     reports = load_reports()
@@ -727,7 +752,7 @@ def update_report(study_uid: str, body: ReportIn):
     return existing
 
 
-@app.delete("/delete/{study_uid}/sequence_report")
+@app.delete("/delete/{study_uid}/sequence_report", tags=["reports"])
 def delete_report(study_uid: str):
     reports = load_reports()
     if reports.pop(study_uid, None) is None:

@@ -1,5 +1,9 @@
 # One-command build + deploy:
-#     gcloud builds submit --config cloudbuild.yaml
+#     gcloud builds submit --region=us-central1 --config cloudbuild.yaml
+#
+# ALWAYS submit regionally: global builds in this project fail at source
+# fetch (twice, 2026-09-01); the us-central1 pool with the default staging
+# bucket works.
 #
 # Substitutions are overridable per-run:
 #     gcloud builds submit --config cloudbuild.yaml --substitutions=_TAG=v2
