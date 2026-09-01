@@ -1,91 +1,59 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { Outlet, useNavigate } from "react-router";
 
-import { describeError, predictSeries } from "@/api";
-import type { ParsedSeries, PredictionResponse, Route } from "@/interfaces";
-import { parseDicomSeries } from "@/lib";
-import { ErrorState } from "@/components/ui";
-import BenchmarkPage from "@/components/pages/BenchmarkPage";
-import HomePage from "@/components/pages/HomePage";
-import ProcessingPage, { type ProcessingStep } from "@/components/pages/ProcessingPage";
-import StudyPage from "@/components/pages/StudyPage";
-import UploadResultPage from "@/components/pages/UploadResultPage";
+import { describeError, uploadStudy } from "@/api";
+import type { ProcessingStep, UploadState } from "@/interfaces";
+import { paths } from "@/lib";
 
-/** Result of a completed upload: the decoded slices plus the model's scores. */
-interface UploadResult {
-  series: ParsedSeries;
-  prediction: PredictionResponse;
-}
-
+/**
+ * Owns the one long-running thing the app does: turning a dropped folder into a
+ * stored study.
+ *
+ * The files are not decoded here any more. They used to be, because the old
+ * flow scored a series and threw it away, so the browser was the only place its
+ * pixels ever existed. Now the study is stored server-side and the viewer reads
+ * it back over the API like any other, which makes a local decode duplicated
+ * work on the way to the same picture.
+ */
 export default function App() {
-  const [route, setRoute] = useState<Route>({ name: "home" });
-  const [upload, setUpload] = useState<UploadResult | null>(null);
+  const navigate = useNavigate();
+  const [studyUid, setStudyUid] = useState<string | null>(null);
   const [fileCount, setFileCount] = useState(0);
   const [step, setStep] = useState<ProcessingStep>(0);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const goHome = useCallback(() => setRoute({ name: "home" }), []);
+  const dismissError = useCallback(() => setError(null), []);
 
-  const handleUpload = useCallback(async (files: File[]) => {
-    setFileCount(files.length);
-    setStep(0);
-    setUploadError(null);
-    setRoute({ name: "processing" });
+  const start = useCallback(
+    async (files: File[]) => {
+      setStudyUid(null);
+      setError(null);
+      setFileCount(files.length);
+      setStep(0);
+      navigate(paths.processing);
 
-    try {
-      // Decode locally first so the viewer has pixels regardless of the API.
-      const series = await parseDicomSeries(files);
-
-      setStep(1);
-      const prediction = await predictSeries(files);
-
-      setStep(2);
-      setUpload({ series, prediction });
-      setRoute({ name: "upload-result" });
-    } catch (cause) {
-      // Without this the app used to sit on the spinner forever.
-      setUploadError(describeError(cause));
-      setRoute({ name: "home" });
-    }
-  }, []);
-
-  const openStudy = useCallback((studyUid: string) => setRoute({ name: "study", studyUid }), []);
-
-  if (route.name === "processing") {
-    return <ProcessingPage fileCount={fileCount} step={step} />;
-  }
-
-  if (route.name === "upload-result" && upload) {
-    return (
-      <UploadResultPage
-        series={upload.series}
-        prediction={upload.prediction}
-        onBack={goHome}
-      />
-    );
-  }
-
-  if (route.name === "study") {
-    return <StudyPage studyUid={route.studyUid} onBack={goHome} />;
-  }
-
-  if (route.name === "benchmark") {
-    return <BenchmarkPage onBack={goHome} onOpenStudy={openStudy} />;
-  }
-
-  return (
-    <div className="flex h-full flex-col overflow-hidden">
-      {uploadError && (
-        <div className="mx-auto w-full max-w-7xl shrink-0 px-6 pt-6">
-          <ErrorState message={uploadError} onRetry={() => setUploadError(null)} />
-        </div>
-      )}
-      <div className="min-h-0 flex-1">
-        <HomePage
-          onUpload={handleUpload}
-          onOpenStudy={openStudy}
-          onOpenBenchmark={() => setRoute({ name: "benchmark" })}
-        />
-      </div>
-    </div>
+      try {
+        setStep(1);
+        // One request: the server stores the study, splits it into its series
+        // and pre-fills the labels from the image model.
+        const study = await uploadStudy(files);
+        setStudyUid(study.study_uid);
+        // replace, so Back from the new study returns to the list rather than
+        // to a progress screen for work that is finished.
+        navigate(paths.study(study.study_uid), { replace: true });
+      } catch (cause) {
+        // Without this the app used to sit on the spinner forever.
+        setError(describeError(cause));
+        navigate(paths.home, { replace: true });
+      }
+    },
+    [navigate],
   );
+
+  const upload = useMemo<UploadState>(
+    () => ({ studyUid, fileCount, step, error, dismissError, start }),
+    [studyUid, fileCount, step, error, dismissError, start],
+  );
+
+  return <Outlet context={upload} />;
 }

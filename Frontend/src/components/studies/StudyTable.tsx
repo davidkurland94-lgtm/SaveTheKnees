@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router";
 
 import type { StudyListEntry } from "@/interfaces";
-import { cn, shortUid } from "@/lib";
+import { cn, paths, shortUid } from "@/lib";
 import { EmptyState, Icon } from "@/components/ui";
 
 const COLUMNS = ["Study UID", "", ""];
@@ -17,7 +18,6 @@ interface StudyTableProps {
   /** True while the next page is in flight; the current rows stay up. */
   loading?: boolean;
   onPage: (page: number) => void;
-  onOpen: (studyUid: string) => void;
   className?: string;
 }
 
@@ -37,7 +37,6 @@ export function StudyTable({
   pageSize,
   loading = false,
   onPage,
-  onOpen,
   className,
 }: StudyTableProps) {
   const [search, setSearch] = useState("");
@@ -67,7 +66,7 @@ export function StudyTable({
           </p>
         </div>
 
-        <div className="flex w-64 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
+        <div className="flex w-64 shrink-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
           <Icon name="search" size={14} className="text-accent" />
           <input
             value={search}
@@ -130,13 +129,14 @@ export function StudyTable({
                       </div>
                     </td>
                     <td className="border-b border-border-soft px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => onOpen(entry.study_uid)}
+                      {/* A link, not a button: a study is a URL, so this one
+                          opens in a new tab on cmd-click like any other. */}
+                      <Link
+                        to={paths.study(entry.study_uid)}
                         className="text-xs font-semibold text-primary hover:text-primary-hover hover:underline"
                       >
                         Open →
-                      </button>
+                      </Link>
                     </td>
                   </tr>
                 ))}

@@ -29,6 +29,7 @@ import type {
   StudyInformation,
   StudyLabelsResponse,
   StudyPredictionResponse,
+  UploadedStudy,
   UploadSequenceResponse,
   VerdictsResponse,
 } from "@/interfaces";
@@ -186,6 +187,31 @@ export function predictSeries(files: File[], signal?: AbortSignal): Promise<Pred
   return requestJson<PredictionResponse>("/predict", { method: "POST", body: form, signal });
 }
 
+/**
+ * `POST /upload/study` — store a folder of DICOM as a new study.
+ *
+ * Unlike `predictSeries`, which scores and forgets, this one keeps: the study
+ * gets a UID in the corpus's own form, appears in `GET /studies`, and opens in
+ * the viewer. The server splits the folder into its series by the
+ * SeriesInstanceUID in the headers, so one drop becomes the sagittal, coronal
+ * and axial runs it actually holds, and pre-fills the twelve labels from the
+ * image model. No report: that is the doctor's, written from these images.
+ */
+export function uploadStudy(
+  files: File[],
+  model: "multiplane" | "sagittal" = "multiplane",
+  signal?: AbortSignal,
+): Promise<UploadedStudy> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file, file.name);
+  return requestJson<UploadedStudy>("/upload/study", {
+    method: "POST",
+    query: { model },
+    body: form,
+    signal,
+  });
+}
+
 /** `POST /predict/report` — English report text in, twelve probabilities out. */
 export function predictReport(
   text: string,
@@ -287,6 +313,7 @@ export const api = {
   getReportVerdicts,
   getModelSummary,
   uploadImageSequence,
+  uploadStudy,
   getStudyInformation,
   get3dMesh,
   view2dSheet,

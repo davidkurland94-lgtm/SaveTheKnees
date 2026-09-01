@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link, useParams } from "react-router";
 
 import {
   getSeriesInstances,
@@ -13,6 +14,7 @@ import {
   closeSlices,
   cn,
   joinParts,
+  paths,
   pluralize,
   shortUid,
   splitContactSheet,
@@ -42,27 +44,23 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "series", label: "Series" },
 ];
 
-interface StudyPageProps {
-  studyUid: string;
-  onBack: () => void;
-}
-
-export function StudyPage({ studyUid, onBack }: StudyPageProps) {
+/** `/{StudyInstanceUID}` — the whole page is addressed by the UID in the path. */
+export function StudyPage() {
+  const { studyUid = "" } = useParams<{ studyUid: string }>();
   const [tab, setTab] = useState<Tab>("model");
   const study = useAsync((signal) => getStudy(studyUid, signal), [studyUid]);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
-      <NavBar onHome={onBack}>
+      <NavBar homeTo={paths.home}>
         {study.data?.is_golden && <GoldenBadge />}
-        <button
-          type="button"
-          onClick={onBack}
+        <Link
+          to={paths.home}
           className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-accent-soft hover:text-primary"
         >
           <Icon name="arrow-left" size={13} />
           Back to studies
-        </button>
+        </Link>
       </NavBar>
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">

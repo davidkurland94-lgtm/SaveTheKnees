@@ -1,20 +1,16 @@
 import { useState } from "react";
+import { Link } from "react-router";
 
 import { getHealth, getStudies } from "@/api";
-import { useAsync } from "@/lib";
+import { paths, useAsync, useUploadState } from "@/lib";
 import { ErrorState, Icon, Loading, NavBar } from "@/components/ui";
 import StudyTable from "@/components/studies/StudyTable";
-import UploadZone from "@/components/upload/UploadZone";
+import UploadStudyButton from "@/components/upload/UploadStudyButton";
 
 const PAGE_SIZE = 20;
 
-interface HomePageProps {
-  onUpload: (files: File[]) => void;
-  onOpenStudy: (studyUid: string) => void;
-  onOpenBenchmark: () => void;
-}
-
-export function HomePage({ onUpload, onOpenStudy, onOpenBenchmark }: HomePageProps) {
+export function HomePage() {
+  const { start, error, dismissError } = useUploadState();
   const [page, setPage] = useState(0);
   const studies = useAsync(
     (signal) => getStudies(PAGE_SIZE, page * PAGE_SIZE, signal),
@@ -29,20 +25,25 @@ export function HomePage({ onUpload, onOpenStudy, onOpenBenchmark }: HomePagePro
           loading={health.loading}
           status={health.error ? "unreachable" : health.data?.status}
         />
-        <button
-          type="button"
-          onClick={onOpenBenchmark}
+        {/* In the bar, not in the table: adding a study is the one thing that
+            must stay reachable when the list itself fails to load. */}
+        <UploadStudyButton onFiles={start} />
+        <Link
+          to={paths.benchmark}
           className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-accent-soft hover:text-primary"
         >
           <Icon name="chart" size={13} />
           Benchmark
-        </button>
+        </Link>
       </NavBar>
 
       <div className="mx-auto flex w-full min-h-0 max-w-7xl flex-1 flex-col gap-8 px-6 py-6">
-        <div className="shrink-0">
-          <UploadZone onFiles={onUpload} />
-        </div>
+        {/* A failed upload lands back here, so this is where it reports. */}
+        {error && (
+          <div className="shrink-0">
+            <ErrorState message={error} onRetry={dismissError} />
+          </div>
+        )}
 
         {studies.error ? (
           <ErrorState message={studies.error} onRetry={studies.reload} />
@@ -54,7 +55,6 @@ export function HomePage({ onUpload, onOpenStudy, onOpenBenchmark }: HomePagePro
             pageSize={PAGE_SIZE}
             loading={studies.loading}
             onPage={setPage}
-            onOpen={onOpenStudy}
             className="flex-1"
           />
         ) : (

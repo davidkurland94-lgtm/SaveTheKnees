@@ -2,15 +2,26 @@
 
 import type { Verdict } from "./api";
 
-/** Which screen the shell is showing. */
-export type Route =
-  | { name: "home" }
-  | { name: "processing" }
-  | { name: "upload-result" }
-  | { name: "study"; studyUid: string }
-  | { name: "benchmark" };
+/**
+ * Index of the step the upload is on.
+ *
+ * Only two, because only two are observable from here: the browser gathering
+ * the folder, and one request in which the server stores the study and scores
+ * it. A third step would be a timer pretending to be progress.
+ */
+export type ProcessingStep = 0 | 1;
 
-export type UploadMode = "single" | "sequence" | "folder";
+export interface UploadState {
+  /** UID of the study the last run created; null until one succeeds. */
+  studyUid: string | null;
+  /** Files accepted by the most recent run; 0 before the first one. */
+  fileCount: number;
+  step: ProcessingStep;
+  /** Why the most recent run failed, if it did. */
+  error: string | null;
+  dismissError: () => void;
+  start: (files: File[]) => void;
+}
 
 /** Bucket used to colour a probability. Derived, never sent by the backend. */
 export type Severity = "high" | "moderate" | "low";
