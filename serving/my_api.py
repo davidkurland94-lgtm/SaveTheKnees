@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from functions import catalog
 from functions.catalog import DataUnavailable
 from functions.labels import LABELS
-from functions.sequence_to_tensor import AXIS_PLANE, sequence_to_tensor
+from functions.sequence_to_tensor import AXIS_PLANE, sequence_to_tensor, sorted_slice_paths
 
 OPENAPI_TAGS = [
     {"name": "health", "description": "Liveness and dataset visibility."},
@@ -390,6 +390,57 @@ def get_preview(study_uid: str, series_uid: str,
     buffer = io.BytesIO()
     Image.fromarray(sheet).save(buffer, format="PNG")
     return Response(content=buffer.getvalue(), media_type="image/png")
+
+
+@app.get("/studies/{study_uid}/series/{series_uid}/instances", tags=["studies"])
+def list_instances(study_uid: str, series_uid: str):
+    """File names of the raw DICOM slices, in acquisition order.
+
+    The order is the one sorted_slice_paths computes -- ImagePositionPatient
+    projected onto the scan axis -- so it is the same order the model is fed.
+    That matters more here than anywhere else: a browser-side viewer reads
+    geometry from only the first, middle and last instance and trusts the rest
+    of the order as given, so this route is what decides whether a volume comes
+    out the right way round.
+    """
+    directory = series_path(study_uid, series_uid)
+    if directory is None:
+        raise HTTPException(404, f"No DICOM files for series {series_uid}")
+
+    names = [path.name for path in sorted_slice_paths(directory)]
+    return {"study_uid": study_uid, "series_uid": series_uid,
+            "count": len(names), "instances": names}
+
+
+@app.get("/studies/{study_uid}/series/{series_uid}/instances/{instance}",
+         tags=["studies"], responses={200: {"content": {"application/dicom": {}}}})
+def get_instance(study_uid: str, series_uid: str, instance: str):
+    """One slice as the raw DICOM file, straight off disk.
+
+    Everything else under /studies serves cooked pixels -- the (24, 224, 224, 1)
+    tensor, the contact sheet PNG -- which is right for the model and wrong for
+    a viewer: it has been sampled to 24 slices, resized to 224 and window/levelled
+    already, and it carries no geometry. This serves the bytes themselves, so a
+    client-side DICOM reader gets full resolution, real millimetres and its own
+    windowing.
+    """
+    directory = series_path(study_uid, series_uid)
+    if directory is None:
+        raise HTTPException(404, f"No DICOM files for series {series_uid}")
+
+    # A name arriving from the network must not walk out of the series folder;
+    # .name drops any directory part before the path is ever joined.
+    path = (directory / Path(instance).name).resolve()
+    if not path.is_relative_to(directory.resolve()) or not path.is_file():
+        raise HTTPException(404, f"No such instance: {instance}")
+
+    return Response(
+        path.read_bytes(),
+        media_type="application/dicom",
+        # A stored slice never changes, and a viewer asks for every one of them
+        # on each visit, so let the browser keep them.
+        headers={"Cache-Control": "public, max-age=86400, immutable"},
+    )
 
 
 # ---------------------------------------------------------------------------

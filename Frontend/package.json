@@ -15,7 +15,11 @@
     "format": "oxfmt"
   },
   "dependencies": {
+    "@cornerstonejs/core": "^5.8.2",
+    "@cornerstonejs/dicom-image-loader": "^5.8.2",
+    "@cornerstonejs/tools": "^5.8.2",
     "dicom-parser": "^1.8.21",
+    "events": "^3.3.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

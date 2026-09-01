@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
-import { getStudy, getStudyLabels, predictStudy, view2dSheet } from "@/api";
+import {
+  getSeriesInstances,
+  getStudy,
+  getStudyLabels,
+  predictStudy,
+  seriesInstanceUrl,
+  view2dSheet,
+} from "@/api";
 import type { GoldenLabels, ModelName, Series, ViewerSlice, ViewerStack } from "@/interfaces";
 import {
   closeSlices,
@@ -11,6 +18,7 @@ import {
   splitContactSheet,
   toFindings,
   useAsync,
+  wadouriImageId,
 } from "@/lib";
 import { Chip, ErrorState, GoldenBadge, Icon, Loading, NavBar } from "@/components/ui";
 import ReportPanel from "@/components/studies/ReportPanel";
@@ -155,14 +163,19 @@ function describeSeries(entry: Series): string {
 }
 
 /**
- * Owns every pixel the two viewers draw — they are UI only, so the fetching
- * happens here.
+ * Owns what the two viewers draw — they are UI only, so the fetching happens
+ * here. Each viewer wants the series in a different form, so there are two
+ * requests per series, both for the selected one only.
  *
- * There is no per-slice image route: `/view/{uid}/2d_image_sequence` returns
- * the 24 slices the model sees as a single contact sheet, which is fetched here
- * and cut back apart. Only the selected series is loaded, since the server
- * rebuilds each sheet from raw DICOM and that is slow, and sheets already seen
- * are kept so flipping between tabs is instant.
+ * `Dicom2DViewer` gets pixels: `/view/{uid}/2d_image_sequence` returns the 24
+ * slices the model sees as one contact sheet, fetched here and cut back apart.
+ * The server rebuilds each sheet from raw DICOM and that is slow, so sheets
+ * already seen are kept and flipping between tabs is instant.
+ *
+ * `Dicom3DViewer` gets image IDs: `/studies/{uid}/series/{uid}/instances` lists
+ * the raw DICOM files in scan order, and Cornerstone streams the bytes behind
+ * them itself. Only the list is fetched here — the pixels never pass through
+ * this component.
  */
 function SeriesViewers({
   studyUid,
@@ -201,6 +214,17 @@ function SeriesViewers({
     [studyUid, activeId],
   );
 
+  // Cheap next to the sheet — a list of file names — but still one request per
+  // series, so it is fetched for the selected one only, like the sheet is.
+  const imageIds = useAsync(
+    async (signal) => {
+      if (!activeId) return [];
+      const { instances } = await getSeriesInstances(studyUid, activeId, signal);
+      return instances.map((name) => wadouriImageId(seriesInstanceUrl(studyUid, activeId, name)));
+    },
+    [studyUid, activeId],
+  );
+
   // ImageBitmaps hold native memory the GC is in no hurry to reclaim, and a
   // five-series study caches 120 of them.
   useEffect(() => {
@@ -217,34 +241,45 @@ function SeriesViewers({
     plane: entry.plane,
     label: labels[position],
     description: describeSeries(entry),
-    // Only the selected series has pixels; the rest are tabs waiting to be
-    // clicked, which is what keeps the page to one sheet request at a time.
+    // Only the selected series carries data; the rest are tabs waiting to be
+    // clicked, which is what keeps the page to one request at a time per view.
     slices: entry.series_uid === activeId ? (slices.data ?? []) : [],
+    imageIds: entry.series_uid === activeId ? (imageIds.data ?? []) : [],
   }));
 
-  // The stacks are empty for three different reasons, and saying which one is
+  // The stacks are empty for several different reasons, and saying which one is
   // the difference between "wait" and "this study has nothing to show".
-  const emptyLabel = loading
-    ? "Loading study…"
-    : slices.loading
-      ? "Building the contact sheet on the server…"
-      : (slices.error ??
-        (available.length === 0
-          ? "No series available for this study."
-          : "No slices for this series."));
+  const emptyReason = (busy: boolean, failure: string | null, waiting: string) =>
+    loading
+      ? "Loading study…"
+      : busy
+        ? waiting
+        : (failure ??
+          (available.length === 0
+            ? "No series available for this study."
+            : "Nothing to show for this series."));
 
   const shared = {
     stacks,
     stackId: activeId ?? undefined,
     onStackChange: setSelectedId,
-    emptyLabel,
     className: "min-h-0 min-w-0 flex-1",
   };
 
   return (
     <>
-      <Dicom2DViewer {...shared} />
-      <Dicom3DViewer {...shared} />
+      <Dicom2DViewer
+        {...shared}
+        emptyLabel={emptyReason(
+          slices.loading,
+          slices.error,
+          "Building the contact sheet on the server…",
+        )}
+      />
+      <Dicom3DViewer
+        {...shared}
+        emptyLabel={emptyReason(imageIds.loading, imageIds.error, "Listing the DICOM slices…")}
+      />
     </>
   );
 }

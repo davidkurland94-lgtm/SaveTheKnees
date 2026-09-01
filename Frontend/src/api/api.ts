@@ -20,6 +20,7 @@ import type {
   ReportPredictionResponse,
   ReportResponse,
   ReportTableResponse,
+  SeriesInstancesResponse,
   SeriesListResponse,
   ServiceInfo,
   StoredReportRecord,
@@ -144,6 +145,32 @@ export function seriesPreviewUrl(studyUid: string, seriesUid: string, columns = 
   });
 }
 
+/**
+ * `GET /studies/{uid}/series/{uid}/instances` — the raw DICOM file names, in
+ * scan order. Pair with `seriesInstanceUrl` to build Cornerstone image IDs.
+ */
+export function getSeriesInstances(
+  studyUid: string,
+  seriesUid: string,
+  signal?: AbortSignal,
+): Promise<SeriesInstancesResponse> {
+  return requestJson<SeriesInstancesResponse>(
+    `/studies/${encode(studyUid)}/series/${encode(seriesUid)}/instances`,
+    { signal },
+  );
+}
+
+/**
+ * URL of one raw DICOM slice. A URL rather than a blob because the viewer's own
+ * loader does the fetching, decoding and caching — handing it bytes would mean
+ * doing all three twice.
+ */
+export function seriesInstanceUrl(studyUid: string, seriesUid: string, instance: string): string {
+  return buildUrl(
+    `/studies/${encode(studyUid)}/series/${encode(seriesUid)}/instances/${encode(instance)}`,
+  );
+}
+
 // ─── Inference on uploads ─────────────────────────────────────────────────────
 
 /**
@@ -250,6 +277,8 @@ export const api = {
   getStudyReport,
   predictStudy,
   getSeriesTensor,
+  getSeriesInstances,
+  seriesInstanceUrl,
   seriesPreviewUrl,
   predictSeries,
   predictReport,

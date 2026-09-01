@@ -44,8 +44,20 @@ export interface ViewerStack {
   description?: string;
   /**
    * `(slice, row, column)` spacing in millimetres, exactly as
-   * `GET /view/{uid}/3d_image_sequence` reports it. Drives how deep the 3D
-   * stack is drawn; without it the depth falls back to a plausible constant.
+   * `GET /view/{uid}/3d_image_sequence` reports it.
    */
   spacingMm?: [number, number, number];
+  /**
+   * Cornerstone image IDs for the raw DICOM slices, in scan order — what
+   * `Dicom3DViewer` builds its volume from.
+   *
+   * Separate from `slices` because the two viewers want different things from
+   * the same series. `slices` is the model's view: 24 tiles, 224 square,
+   * already windowed, no geometry. Cornerstone wants the files, so it can read
+   * the real millimetres out of the headers and reconstruct a volume — which is
+   * the whole reason it can reslice and volume-render where a stack of PNGs
+   * could only be leafed through. The page still does the fetching (of the
+   * *list*); the loader behind these IDs streams the pixels itself.
+   */
+  imageIds?: string[];
 }

@@ -119,6 +119,20 @@ export interface SeriesListResponse {
   series: Series[];
 }
 
+/**
+ * `GET /studies/{uid}/series/{uid}/instances` — the raw DICOM file names.
+ *
+ * Ordered along the scan axis by the server. A browser-side DICOM reader reads
+ * geometry from the first, middle and last instance only and takes the rest of
+ * the order on trust, so this array is what puts the volume the right way up.
+ */
+export interface SeriesInstancesResponse {
+  study_uid: string;
+  series_uid: string;
+  count: number;
+  instances: string[];
+}
+
 /** `GET /studies/{study_uid}/labels` — the pilkwang report-derived labels. */
 export interface StudyLabelsResponse {
   study_uid: string;
