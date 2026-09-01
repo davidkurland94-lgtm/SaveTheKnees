@@ -1,43 +1,69 @@
 import { useMemo, useState } from "react";
 
-import type { GoldenStudy } from "@/interfaces";
-import { positiveLabels, shortUid } from "@/lib";
-import { EmptyState, Icon, Tag } from "@/components/ui";
+import type { StudyListEntry } from "@/interfaces";
+import { cn, shortUid } from "@/lib";
+import { EmptyState, Icon } from "@/components/ui";
 
-const COLUMNS = ["Study UID", "Positive findings", "Count", ""];
+const COLUMNS = ["Study UID", "", ""];
 
 interface StudyTableProps {
-  studies: GoldenStudy[];
+  /** One page of `GET /studies`, already fetched by the page. */
+  studies: StudyListEntry[];
+  /** Studies in the whole corpus, for the page count. */
+  total: number;
+  /** Zero-based. */
+  page: number;
+  pageSize: number;
+  /** True while the next page is in flight; the current rows stay up. */
+  loading?: boolean;
+  onPage: (page: number) => void;
   onOpen: (studyUid: string) => void;
+  className?: string;
 }
 
-/** The 58 hand-labelled studies, filtered by UID or by finding name. */
-export function StudyTable({ studies, onOpen }: StudyTableProps) {
+/**
+ * The corpus, one page at a time.
+ *
+ * `GET /studies` is paginated server-side and the whole list is 4,407 rows, so
+ * the page index is the source of truth and only twenty rows exist in the
+ * browser at once. The table body scrolls inside its own box rather than
+ * growing the page, which is what keeps the upload zone above it always
+ * reachable.
+ */
+export function StudyTable({
+  studies,
+  total,
+  page,
+  pageSize,
+  loading = false,
+  onPage,
+  onOpen,
+  className,
+}: StudyTableProps) {
   const [search, setSearch] = useState("");
 
+  // Deliberately scoped to the rows in hand: `GET /studies` takes limit and
+  // offset but no query, so anything wider than this would need a server-side
+  // search to exist first. The placeholder says so rather than implying a
+  // corpus-wide hit.
   const rows = useMemo(() => {
-    const enriched = studies.map((study) => ({
-      study,
-      positives: positiveLabels(study.labels),
-    }));
-
     const query = search.trim().toLowerCase();
-    if (!query) return enriched;
-
-    return enriched.filter(
-      ({ study, positives }) =>
-        study.study_uid.toLowerCase().includes(query) ||
-        positives.some((label) => label.toLowerCase().includes(query)),
-    );
+    if (!query) return studies;
+    return studies.filter((entry) => entry.study_uid.toLowerCase().includes(query));
   }, [studies, search]);
 
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const first = total === 0 ? 0 : page * pageSize + 1;
+  const last = Math.min((page + 1) * pageSize, total);
+
   return (
-    <section className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
+    <section className={cn("flex min-h-0 flex-col gap-4", className)}>
+      <div className="flex shrink-0 items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl text-foreground">Golden dataset</h2>
+          <h2 className="text-xl text-foreground">Studies</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            The {studies.length} hand-labelled studies — the only ground truth in the dataset.
+            All {total.toLocaleString()} studies in the corpus. Ground-truth rows are the 58
+            hand-labelled ones.
           </p>
         </div>
 
@@ -46,78 +72,125 @@ export function StudyTable({ studies, onOpen }: StudyTableProps) {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search UID or finding…"
-            aria-label="Search studies"
+            placeholder="Filter this page by UID…"
+            aria-label="Filter the studies on this page"
             className="flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-subtle"
           />
         </div>
       </div>
 
-      {rows.length === 0 ? (
-        <EmptyState message="No studies match that search." />
-      ) : (
-        <div className="overflow-hidden rounded-2xl border border-border">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-card">
-                {COLUMNS.map((heading) => (
-                  <th
-                    key={heading}
-                    className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                  >
-                    {heading}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(({ study, positives }, index) => (
-                <tr
-                  key={study.study_uid}
-                  className={
-                    index === rows.length - 1
-                      ? "transition-colors hover:bg-card"
-                      : "border-b border-border-soft transition-colors hover:bg-card"
-                  }
-                >
-                  <td className="px-4 py-3">
-                    <span
-                      className="font-mono text-xs text-foreground"
-                      title={study.study_uid}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border">
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {rows.length === 0 ? (
+            <EmptyState
+              message={loading ? "Loading studies…" : "No study on this page matches that filter."}
+            />
+          ) : (
+            // border-separate, not the default collapse: a collapsed border on a
+            // sticky header does not travel with it, so the heading row loses its
+            // underline the moment the body scrolls.
+            <table
+              className={cn(
+                "w-full border-separate border-spacing-0 text-sm transition-opacity",
+                loading && "opacity-50",
+              )}
+            >
+              <thead>
+                <tr>
+                  {COLUMNS.map((heading, index) => (
+                    <th
+                      key={index}
+                      className="sticky top-0 z-10 border-b border-border bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                     >
-                      {shortUid(study.study_uid, 18)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    {positives.length === 0 ? (
-                      <span className="text-xs text-muted-foreground">No positive findings</span>
-                    ) : (
-                      <div className="flex flex-wrap gap-1">
-                        {positives.map((label) => (
-                          <Tag key={label}>{label}</Tag>
-                        ))}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                    {positives.length}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => onOpen(study.study_uid)}
-                      className="text-xs font-semibold text-primary hover:text-primary-hover hover:underline"
-                    >
-                      Open →
-                    </button>
-                  </td>
+                      {heading}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((entry) => (
+                  <tr key={entry.study_uid} className="transition-colors hover:bg-card">
+                    <td className="border-b border-border-soft px-4 py-3">
+                      <span className="font-mono text-xs text-foreground" title={entry.study_uid}>
+                        {shortUid(entry.study_uid, 24)}
+                      </span>
+                    </td>
+                    <td className="border-b border-border-soft px-4 py-3">
+                      <div className="flex flex-wrap gap-1">
+                        {entry.golden && (
+                          <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                            Ground truth
+                          </span>
+                        )}
+                        {entry.has_report && (
+                          <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-secondary-foreground">
+                            Report
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="border-b border-border-soft px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => onOpen(entry.study_uid)}
+                        className="text-xs font-semibold text-primary hover:text-primary-hover hover:underline"
+                      >
+                        Open →
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
-      )}
+
+        <div className="flex shrink-0 items-center justify-between gap-4 border-t border-border bg-card px-4 py-2.5">
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {first.toLocaleString()}–{last.toLocaleString()} of {total.toLocaleString()}
+          </span>
+          <div className="flex items-center gap-1">
+            <PageButton label="Previous" disabled={page === 0} onClick={() => onPage(page - 1)}>
+              <Icon name="arrow-left" size={13} />
+            </PageButton>
+            <span className="px-2 text-xs tabular-nums text-muted-foreground">
+              Page {(page + 1).toLocaleString()} of {pages.toLocaleString()}
+            </span>
+            <PageButton
+              label="Next"
+              disabled={page + 1 >= pages}
+              onClick={() => onPage(page + 1)}
+            >
+              <Icon name="arrow-left" size={13} className="rotate-180" />
+            </PageButton>
+          </div>
+        </div>
+      </div>
     </section>
+  );
+}
+
+function PageButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="rounded-lg border border-border p-1.5 text-muted-foreground transition-colors hover:border-accent-soft hover:text-primary disabled:pointer-events-none disabled:opacity-30"
+    >
+      {children}
+    </button>
   );
 }
 

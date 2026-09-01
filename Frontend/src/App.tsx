@@ -73,17 +73,19 @@ export default function App() {
   }
 
   return (
-    <>
+    <div className="flex h-full flex-col overflow-hidden">
       {uploadError && (
-        <div className="mx-auto w-full max-w-7xl px-6 pt-6">
+        <div className="mx-auto w-full max-w-7xl shrink-0 px-6 pt-6">
           <ErrorState message={uploadError} onRetry={() => setUploadError(null)} />
         </div>
       )}
-      <HomePage
-        onUpload={handleUpload}
-        onOpenStudy={openStudy}
-        onOpenBenchmark={() => setRoute({ name: "benchmark" })}
-      />
-    </>
+      <div className="min-h-0 flex-1">
+        <HomePage
+          onUpload={handleUpload}
+          onOpenStudy={openStudy}
+          onOpenBenchmark={() => setRoute({ name: "benchmark" })}
+        />
+      </div>
+    </div>
   );
 }

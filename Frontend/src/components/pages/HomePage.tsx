@@ -1,8 +1,12 @@
-import { getGoldenStudies, getHealth } from "@/api";
+import { useState } from "react";
+
+import { getHealth, getStudies } from "@/api";
 import { useAsync } from "@/lib";
 import { ErrorState, Icon, Loading, NavBar } from "@/components/ui";
 import StudyTable from "@/components/studies/StudyTable";
 import UploadZone from "@/components/upload/UploadZone";
+
+const PAGE_SIZE = 20;
 
 interface HomePageProps {
   onUpload: (files: File[]) => void;
@@ -11,11 +15,15 @@ interface HomePageProps {
 }
 
 export function HomePage({ onUpload, onOpenStudy, onOpenBenchmark }: HomePageProps) {
-  const golden = useAsync((signal) => getGoldenStudies(signal), []);
+  const [page, setPage] = useState(0);
+  const studies = useAsync(
+    (signal) => getStudies(PAGE_SIZE, page * PAGE_SIZE, signal),
+    [page],
+  );
   const health = useAsync((signal) => getHealth(signal), []);
 
   return (
-    <div className="flex min-h-full flex-col bg-background">
+    <div className="flex h-full flex-col overflow-hidden bg-background">
       <NavBar>
         <HealthPill
           loading={health.loading}
@@ -31,15 +39,26 @@ export function HomePage({ onUpload, onOpenStudy, onOpenBenchmark }: HomePagePro
         </button>
       </NavBar>
 
-      <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-10 px-6 py-8">
-        <UploadZone onFiles={onUpload} />
+      <div className="mx-auto flex w-full min-h-0 max-w-7xl flex-1 flex-col gap-8 px-6 py-6">
+        <div className="shrink-0">
+          <UploadZone onFiles={onUpload} />
+        </div>
 
-        {golden.loading ? (
-          <Loading label="Loading the golden dataset…" />
-        ) : golden.error ? (
-          <ErrorState message={golden.error} onRetry={golden.reload} />
+        {studies.error ? (
+          <ErrorState message={studies.error} onRetry={studies.reload} />
+        ) : studies.data ? (
+          <StudyTable
+            studies={studies.data.studies}
+            total={studies.data.total}
+            page={page}
+            pageSize={PAGE_SIZE}
+            loading={studies.loading}
+            onPage={setPage}
+            onOpen={onOpenStudy}
+            className="flex-1"
+          />
         ) : (
-          <StudyTable studies={golden.data?.studies ?? []} onOpen={onOpenStudy} />
+          <Loading label="Loading studies…" />
         )}
       </div>
     </div>
