@@ -15,8 +15,8 @@ substitutions:
   _REPO: stk
   _SERVICE: stk-api
   _TAG: v1
-  _DATA_BUCKET: savetheknees-images
-  _MODEL_BUCKET: savetheknees-models
+  _DATA_BUCKET: knees-images
+  _MODEL_BUCKET: knees-models
   _ALLOWED_ORIGINS: "*"           # pin to the front end's domain once it exists
 
 options:

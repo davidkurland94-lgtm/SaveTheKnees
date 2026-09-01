@@ -1,0 +1,19 @@
+# Training environment -- any OS, using that machine's own GPU where possible.
+#     pip install -r requirements-train.txt
+#
+# GPU reality per platform (pip picks the right line automatically):
+#   Linux / WSL2 + NVIDIA : tensorflow[and-cuda] -- CUDA wheels, GPU out of the box
+#                           (RTX 50-series is the exception: use the NGC compose
+#                           'train' service; pip CUDA wheels don't know sm_120 yet)
+#   macOS Apple Silicon   : tensorflow + tensorflow-metal -- Metal GPU plugin
+#   Windows native        : CPU ONLY (TF dropped native-Windows GPU) -- fine for
+#                           the report model; for image models use WSL2 instead
+tensorflow[and-cuda]==2.20.* ; sys_platform == "linux"
+tensorflow==2.20.* ; sys_platform == "darwin" or sys_platform == "win32"
+tensorflow-metal ; sys_platform == "darwin"
+
+numpy==2.2.6
+pandas==2.3.3
+scikit-learn==1.7.2
+joblib==1.5.3
+pydicom==3.0.2
