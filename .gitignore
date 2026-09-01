@@ -263,3 +263,4 @@ logs/
 # Platform-managed agentplat state, not project source.
 /.plugins/
 /.opencode-skills/
+*.gstmp

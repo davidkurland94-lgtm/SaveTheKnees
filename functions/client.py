@@ -17,11 +17,23 @@ import urllib.request
 
 import pandas as pd
 
-DEFAULT_API = os.environ.get("STK_API", "http://127.0.0.1:8000").rstrip("/")
+from functions.env import load_env
+
+load_env()   # .env at the repo root; the shell environment wins over the file
+
+
+def _api_base():
+    """The API root, from STK_API (shell env or .env). Never hardcoded."""
+    base = os.environ.get("STK_API", "").rstrip("/")
+    if not base:
+        raise RuntimeError("STK_API is not set -- export it or add "
+                           "'STK_API=https://<api-url>' to the repo's .env "
+                           "(see .env.example)")
+    return base
 
 
 def _get(path, base=None, timeout=300, **params):
-    url = f"{base or DEFAULT_API}{path}"
+    url = f"{base or _api_base()}{path}"
     if params:
         url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
     with urllib.request.urlopen(urllib.request.Request(url), timeout=timeout) as r:
@@ -29,7 +41,7 @@ def _get(path, base=None, timeout=300, **params):
 
 
 def _post_json(path, body, base=None, timeout=300):
-    req = urllib.request.Request(f"{base or DEFAULT_API}{path}",
+    req = urllib.request.Request(f"{base or _api_base()}{path}",
                                  data=json.dumps(body).encode("utf-8"),
                                  headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as r:

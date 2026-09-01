@@ -94,7 +94,7 @@ def predict_study(study_uid, axis="X", data_root=None):
     import pandas as pd
     from functions.sequence_to_tensor import study_to_tensor
 
-    data_root = Path(data_root) if data_root else REPO_ROOT / "data"
+    data_root = _data_root(data_root)
     if _loaded is None:
         model, status = load_predictor()
         series_df = pd.read_csv(data_root / "train_series.csv")
@@ -113,6 +113,25 @@ def predict_study(study_uid, axis="X", data_root=None):
 # report for fusion) only exist server-side, in the tensor + translation caches.
 # ---------------------------------------------------------------------------
 
+def _model_file(fname):
+    """One checkpoint: the repo's models/ first, else the Cloud Run mount.
+
+    The serving image ships only the sagittal+report trio (image diet);
+    multiplane and fusion arrive through the bucket mounted at /mnt/models
+    (overridable via MODELS_ROOT)."""
+    local = REPO_ROOT / "models" / fname
+    if local.exists():
+        return local
+    return Path(os.environ.get("MODELS_ROOT", "/mnt/models")) / fname
+
+
+def _data_root(override=None):
+    """The repo data/ locally, /mnt/data (env DATA_ROOT) on Cloud Run."""
+    if override:
+        return Path(override)
+    return Path(os.environ.get("DATA_ROOT", REPO_ROOT / "data"))
+
+
 STUDY_MODELS = {
     "sagittal":   ["knee_findings.keras"],
     "multiplane": ["knee_multiplane.keras", "knee_multiplane_s1.keras", "knee_multiplane_s2.keras"],
@@ -127,7 +146,7 @@ def _load_study_models(name):
     if name not in _study_models:
         models = []
         for fname in STUDY_MODELS[name]:
-            path = REPO_ROOT / "models" / fname
+            path = _model_file(fname)
             if path.exists():
                 models.append(keras.saving.load_model(path, compile=False))
         _study_models[name] = models
@@ -147,7 +166,7 @@ def predict_study_with(study_uid, model="fusion", data_root=None):
     import pandas as pd
     from functions.tensor_cache import cache_path, load_cached
 
-    data_root = Path(data_root) if data_root else REPO_ROOT / "data"
+    data_root = _data_root(data_root)
     cache_dir = data_root / "tensor_cache"
     models = _load_study_models(model)
     if not models:
@@ -163,7 +182,7 @@ def predict_study_with(study_uid, model="fusion", data_root=None):
         texts = pd.read_csv(data_root / "meta" / "reports_en.csv").set_index("StudyInstanceUID")
         if study_uid not in texts.index:
             return None
-        vectorizer = joblib.load(REPO_ROOT / "models" / "report_vectorizer.joblib")
+        vectorizer = joblib.load(_model_file("report_vectorizer.joblib"))
         inputs.append(vectorizer.transform([str(texts.loc[study_uid, "report_en"])])
                                 .toarray().astype("float32"))
 
@@ -179,9 +198,9 @@ if __name__ == "__main__":
     layout = "2.5D (H, W, K)" if _wants_channels(model) else "3D (K, H, W, 1)"
     print(f"model: {status} | layout: {layout}")
 
-    series_df = pd.read_csv(REPO_ROOT / "data" / "train_series.csv")
+    series_df = pd.read_csv(_data_root() / "train_series.csv")
     row = series_df.iloc[0]
-    d = REPO_ROOT / "data" / "train_series" / row.StudyInstanceUID / row.SeriesInstanceUID
+    d = _data_root() / "train_series" / row.StudyInstanceUID / row.SeriesInstanceUID
 
     result = predict_series(model, d)
     if result is None:

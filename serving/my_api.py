@@ -14,6 +14,7 @@ import io
 import json
 import os
 import shutil
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,11 +25,31 @@ from pydantic import BaseModel, Field
 
 from functions import catalog
 from functions.catalog import DataUnavailable
+from functions.labels import LABELS
 from functions.sequence_to_tensor import AXIS_PLANE, sequence_to_tensor
+
+OPENAPI_TAGS = [
+    {"name": "health", "description": "Liveness and dataset visibility."},
+    {"name": "studies", "description": "Read-only browsing of the corpus: "
+     "studies, reports, labels, series, tensors, previews."},
+    {"name": "predict", "description": "The trained models. Three entry points, three cases: "
+     "**a study already in the dataset** -> GET /studies/{uid}/predict?model= (sagittal | multiplane | fusion); "
+     "**a NEW series you upload** -> POST /predict; "
+     "**raw report text** -> POST /predict/report."},
+    {"name": "evaluation", "description": "The referee: every reader scored on the 58 gold "
+     "studies, verdict sheets, model cards. What models_pipe.ipynb reads remotely."},
+    {"name": "upload", "description": "Add new DICOM series (stored under WRITE_ROOT)."},
+    {"name": "views", "description": "Rendering: 3D mesh, 2D contact sheet, study information."},
+    {"name": "reports", "description": "User-WRITTEN reports (create/update/delete) -- not the "
+     "dataset's radiology reports, those live under /studies/{uid}/report."},
+]
 
 app = FastAPI(
     title="Save the Knees",
-    description="Knee MRI in, twelve finding probabilities out.",
+    description="Knee MRI in, twelve finding probabilities out. "
+                "Sections read top to bottom: check health, browse studies, "
+                "run a predict, audit the models in evaluation.",
+    openapi_tags=OPENAPI_TAGS,
 )
 
 # The front end is served from a different origin, so without this the browser
@@ -43,8 +64,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.get("/")
+@app.get("/", tags=["health"])
 def root():
     """Cloud Run health checks and curious humans both land here."""
     return {"service": "save-the-knees", "docs": "/docs", "health": "/health"}
@@ -131,6 +151,21 @@ class Prediction(BaseModel):
     probabilities: dict[str, float]
 
 
+class UploadPrediction(BaseModel):
+    model_status: str
+    n_slices_received: int
+    predictions: dict[str, float]
+
+
+class ReportTextIn(BaseModel):
+    text: str
+
+
+class ReportPrediction(BaseModel):
+    model_status: str
+    predictions: dict[str, float]
+
+
 # ---------------------------------------------------------------------------
 # The JSON file standing in for a database
 # ---------------------------------------------------------------------------
@@ -158,6 +193,17 @@ def get_model():
     return _model_cache["model"], _model_cache["status"]
 
 
+def get_report_model():
+    """The text model + its vectorizer, loaded once; None when not on disk."""
+    if "report" not in _model_cache:
+        try:
+            from models.report_model import load_report_predictor
+            _model_cache["report"] = load_report_predictor()
+        except Exception:
+            _model_cache["report"] = None
+    return _model_cache["report"]
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -166,7 +212,7 @@ def now() -> str:
 # Health
 # ---------------------------------------------------------------------------
 
-@app.get("/health")
+@app.get("/health", tags=["health"])
 def health():
     """Is the process up, and can it see the dataset?"""
     try:
@@ -177,10 +223,180 @@ def health():
 
 
 # ---------------------------------------------------------------------------
+# Dataset -- read-only routes over the corpus (migrated from serving/studies.py)
+#
+# Route order matters: /studies/golden is declared before /studies/{study_uid},
+# otherwise FastAPI matches the literal "golden" as a study UID.
+# ---------------------------------------------------------------------------
+
+@app.get("/studies", tags=["studies"])
+def list_studies(limit: int = Query(100, ge=1, le=1000),
+                 offset: int = Query(0, ge=0)):
+    """Every study in the corpus, paginated (4,407 rows -- never dumped whole).
+
+    golden=True marks the 58 hand-labelled studies; drill into one with
+    /studies/{study_uid}.
+    """
+    df = guard(catalog.studies)
+    page = df.iloc[offset:offset + limit]
+    golden = page[LABELS].notna().all(axis=1)
+    return {"total": int(len(df)), "offset": offset, "limit": limit,
+            "studies": [{"study_uid": uid,
+                         "golden": bool(golden.loc[uid]),
+                         "has_report": bool(isinstance(row.Report, str) and row.Report.strip())}
+                        for uid, row in page.iterrows()]}
+
+
+@app.get("/studies/golden", tags=["studies"])
+def list_golden():
+    """The 58 hand-labelled studies -- the only ground truth in the dataset."""
+    rows = guard(catalog.golden_studies)
+    return {"count": len(rows), "labels": LABELS, "studies": rows}
+
+
+@app.get("/studies/{study_uid}", tags=["studies"])
+def get_study(study_uid: str):
+    """One study's record, its series inline."""
+    return require_study(study_uid)
+
+
+@app.get("/studies/{study_uid}/report", tags=["studies"])
+def get_dataset_report(study_uid: str,
+                       lang: str = Query("original", pattern="^(original|en)$")):
+    """The radiologist's report from the dataset (NOT a user-written one).
+
+    Mixed language corpus (half English, the rest es/tr/hr/bg/el/nl/de).
+    Default: exactly as the dataset ships it. lang=en serves the machine
+    translation the report model trains on (data/meta/reports_en.csv);
+    404 when that cache is not mounted.
+    """
+    report = guard(catalog.get_report, study_uid, lang)
+    if report is None:
+        detail = (f"No English translation available for {study_uid}" if lang == "en"
+                  else f"No report for study: {study_uid}")
+        raise HTTPException(404, detail)
+    return report
+
+
+@app.get("/studies/{study_uid}/labels", tags=["studies"])
+def get_labels(study_uid: str):
+    """All twelve pilkwang labels: probability, confidence, YES/NO/UNK verdict."""
+    labels = guard(catalog.get_labels, study_uid)
+    if labels is None:
+        raise HTTPException(404, f"No pilkwang labels for study: {study_uid}")
+    return labels
+
+
+@app.get("/studies/{study_uid}/labels/{label}", tags=["studies"])
+def get_label(study_uid: str, label: str):
+    """One label. Accepts the slug ("medial-meniscus", "bakers") or exact name."""
+    if catalog.resolve_label(label) is None:
+        raise HTTPException(404, f"Unknown label: {label}. Known: {sorted(catalog.SLUGS)}")
+    result = guard(catalog.get_label, study_uid, label)
+    if result is None:
+        raise HTTPException(404, f"No pilkwang labels for study: {study_uid}")
+    return result
+
+
+@app.get("/studies/{study_uid}/predict", tags=["studies"])
+def predict_with_model(study_uid: str,
+                       model: str = Query("fusion", pattern="^(sagittal|multiplane|fusion)$")):
+    """Run one of OUR trained models on a study by UID.
+
+    sagittal    the single-plane 3D CNN (also behind GET /predict/{uid})
+    multiplane  the 3-seed sagittal+coronal+axial ensemble
+    fusion      images + report, jointly trained -- the project's best (default)
+
+    Needs the tensor cache (and, for fusion, the translated reports) under
+    DATA_ROOT, which is why this is study-keyed rather than an upload.
+    """
+    from functions.predict import predict_study_with
+    try:
+        result = predict_study_with(study_uid, model)
+    except FileNotFoundError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, f"{study_uid}: not cached for model '{model}' "
+                                 "(needs the tensor cache; fusion also needs reports_en.csv)")
+    return {"study_uid": study_uid, "model": model, "predictions": result}
+
+
+@app.get("/studies/{study_uid}/series", tags=["studies"])
+def list_series(study_uid: str,
+                plane: str | None = Query(None, description="Sagittal | Coronal | Axial")):
+    """Every sequence of a study."""
+    if plane is not None and plane not in AXIS_PLANE.values():
+        raise HTTPException(400, f"plane must be one of {sorted(AXIS_PLANE.values())}")
+    require_study(study_uid)
+    rows = guard(catalog.list_series, study_uid, plane)
+    return {"study_uid": study_uid, "count": len(rows), "series": rows}
+
+
+@app.get("/studies/{study_uid}/series/{series_uid}", tags=["studies"])
+def get_series(study_uid: str, series_uid: str):
+    """One sequence: plane, acquisition flags, slice count, whether files exist."""
+    record = guard(catalog.get_series, study_uid, series_uid)
+    if record is None:
+        raise HTTPException(404, f"Series {series_uid} not found in study {study_uid}")
+    return record
+
+
+@app.get("/studies/{study_uid}/series/{series_uid}/tensor", tags=["studies"])
+def get_tensor(study_uid: str, series_uid: str):
+    """The model-ready tensor as a .npy download: (24, 224, 224, 1) float32.
+
+    Same function the model is served by, so what you download here is exactly
+    what the network sees. Resolved through series_path, so uploaded and gold
+    series work too, not only train_series/.
+    """
+    directory = series_path(study_uid, series_uid)
+    if directory is None:
+        raise HTTPException(404, f"No DICOM files for series {series_uid}")
+
+    x = sequence_to_tensor(directory)
+    if x is None:
+        raise HTTPException(422, f"Could not build a tensor from {series_uid}")
+
+    buffer = io.BytesIO()
+    np.save(buffer, x)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{series_uid}.npy"'},
+    )
+
+
+@app.get("/studies/{study_uid}/series/{series_uid}/preview.png", tags=["studies"])
+def get_preview(study_uid: str, series_uid: str,
+                columns: int = Query(6, ge=1, le=24, description="montage width")):
+    """A PNG contact sheet of the 24 sampled slices, for eyeballing a series."""
+    from PIL import Image
+
+    directory = series_path(study_uid, series_uid)
+    if directory is None:
+        raise HTTPException(404, f"No DICOM files for series {series_uid}")
+
+    x = sequence_to_tensor(directory)
+    if x is None:
+        raise HTTPException(422, f"Could not build a tensor from {series_uid}")
+
+    k, size = x.shape[0], x.shape[1]
+    rows = -(-k // columns)
+    sheet = np.zeros((rows * size, columns * size), dtype=np.uint8)
+    for i in range(k):
+        r, c = divmod(i, columns)
+        sheet[r * size:(r + 1) * size, c * size:(c + 1) * size] = (x[i, :, :, 0] * 255).astype(np.uint8)
+
+    buffer = io.BytesIO()
+    Image.fromarray(sheet).save(buffer, format="PNG")
+    return Response(content=buffer.getvalue(), media_type="image/png")
+
+
+# ---------------------------------------------------------------------------
 # Upload
 # ---------------------------------------------------------------------------
 
-@app.post("/upload/{study_uid}/image_sequence")
+@app.post("/upload/{study_uid}/image_sequence", tags=["upload"])
 async def upload_new_sequence(
     study_uid: str,
     series_uid: str = Query(..., description="Folder name to store the slices under."),
@@ -246,7 +462,7 @@ def resolve_series(study_uid: str, series_uid: str | None, plane: str | None):
     return match
 
 
-@app.get("/view/{study_uid}/3d_image_sequence")
+@app.get("/view/{study_uid}/3d_image_sequence", tags=["views"])
 def view_3d_sequence(
     study_uid: str,
     series_uid: str | None = None,
@@ -291,7 +507,7 @@ def view_3d_sequence(
     }
 
 
-@app.get("/view/{study_uid}/2d_image_sequence",
+@app.get("/view/{study_uid}/2d_image_sequence", tags=["views"],
          responses={200: {"content": {"image/png": {}}}})
 def view_2d_sequence(
     study_uid: str,
@@ -327,7 +543,7 @@ def view_2d_sequence(
     return Response(buffer.getvalue(), media_type="image/png")
 
 
-@app.get("/view/{study_uid}/information")
+@app.get("/view/{study_uid}/information", tags=["views"])
 def view_patient_information(study_uid: str):
     """Everything the dataset knows about the study: series, planes, whether it
     is one of the 58 gold-labelled ones, and any report I have stored."""
@@ -346,13 +562,18 @@ def view_patient_information(study_uid: str):
 # Predict
 # ---------------------------------------------------------------------------
 
-@app.get("/predict/{study_uid}", response_model=Prediction)
+@app.get("/predict/{study_uid}", response_model=Prediction, tags=["predict"],
+         deprecated=True)
 def predict(
     study_uid: str,
     axis: str = Query("X", pattern="^[XYZ]$",
                       description="X=Sagittal, Y=Coronal, Z=Axial."),
 ):
-    """Run the checkpointed image model over the study.
+    """DEPRECATED -- use GET /studies/{study_uid}/predict?model=sagittal.
+
+    Kept for the front end's transition. It builds its tensor from raw DICOM
+    on the server, so it only works where train_series/ (or an upload) exists
+    -- NOT on Cloud Run, whose bucket deliberately carries no raw DICOM.
 
     functions.predict.predict_study would be the one-liner here, but it builds
     its tensor through study_to_tensor, which hardcodes data/train_series/.
@@ -382,11 +603,124 @@ def predict(
     )
 
 
+@app.post("/predict", response_model=UploadPrediction, tags=["predict"])
+async def predict_upload(files: list[UploadFile] = File(...)):
+    """Upload every .dcm of ONE series (one plane of one study) -- for data
+    that is NOT in the dataset yet.
+
+    The whole series is needed: intensity is normalised with one percentile
+    window PER SERIES, and 24 slices are sampled across it.
+    """
+    from functions.predict import predict_series
+    dicoms = [f for f in files if (f.filename or "").lower().endswith(".dcm")]
+    if not dicoms:
+        raise HTTPException(400, "No .dcm files in the upload.")
+    model, status = get_model()
+    tmp = Path(tempfile.mkdtemp(prefix="stk_"))
+    try:
+        for upload in dicoms:
+            with open(tmp / Path(upload.filename).name, "wb") as out:
+                shutil.copyfileobj(upload.file, out)
+        result = predict_series(model, tmp)
+        if result is None:
+            raise HTTPException(422, "Could not read a series from those files.")
+        return UploadPrediction(model_status=status,
+                                n_slices_received=len(dicoms), predictions=result)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@app.post("/predict/report", response_model=ReportPrediction, tags=["predict"])
+def predict_report_text(body: ReportTextIn):
+    """English report text in, twelve finding probabilities out."""
+    pair = get_report_model()
+    if pair is None:
+        raise HTTPException(503, "report model not available on this deployment")
+    model, vectorizer = pair
+    x = vectorizer.transform([body.text]).toarray().astype("float32")
+    probs = model.predict(x, verbose=0)[0]
+    return ReportPrediction(model_status="trained",
+                            predictions={l: float(p) for l, p in zip(LABELS, probs)})
+
+
+# ---------------------------------------------------------------------------
+# Evaluation -- the referee's tables and model cards, what the notebook's
+# remote mode reads. Thin JSON views over models/evaluate_labels.py and
+# models/report_quality.py; a missing artifact answers 503, never a traceback.
+# ---------------------------------------------------------------------------
+
+def _records(table):
+    """DataFrame (label index) -> JSON-safe list of rows."""
+    out = table.reset_index()
+    # NaN is not JSON, and pandas keeps NaN in float columns even after
+    # where(..., None); go through object dtype so None actually lands.
+    out = out.astype(object).where(out.notna(), None)
+    return out.to_dict(orient="records")
+
+
+def _guarded(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except FileNotFoundError as exc:
+        raise HTTPException(503, f"evaluation artifact missing on the server: {exc}") from exc
+
+
+@app.get("/report/table", tags=["evaluation"])
+def report_table():
+    """The full sheet: every reader vs the 58 gold studies (final_table)."""
+    from models.evaluate_labels import final_table
+    return {"rows": _records(_guarded(final_table))}
+
+
+@app.get("/report/compare/{which}", tags=["evaluation"])
+def report_compare(which: str):
+    """image = David vs LLM . report = Kevin vs LLM . showdown = David vs best reader."""
+    from models import evaluate_labels as ev
+    fn = {"image": ev.image_model_vs_llm, "report": ev.report_model_vs_llm,
+          "showdown": ev.david_vs_best_reader}.get(which)
+    if fn is None:
+        raise HTTPException(404, "which must be image | report | showdown")
+    table = _guarded(fn)
+    if table is None:
+        raise HTTPException(503, "image model gold predictions not available yet")
+    return {"rows": _records(table)}
+
+
+@app.get("/report/verdicts", tags=["evaluation"])
+def report_verdicts(top: int = Query(20, ge=1, le=500)):
+    """Worst reports first: what the report said vs what the images think."""
+    from models import report_quality as rq
+    if not rq.OUT.exists():
+        _guarded(rq.run, top=0)              # score the corpus once, quietly
+    return {"rows": _guarded(rq.verdict_sheet, top).to_dict(orient="records")}
+
+
+@app.get("/models/{name}/summary", tags=["evaluation"])
+def model_summary(name: str):
+    """Keras layer table + parameter count of one trained model, as text."""
+    from functions.predict import STUDY_MODELS, _load_study_models
+    if name == "report":
+        pair = get_report_model()
+        if pair is None:
+            raise HTTPException(503, "report model not available on this deployment")
+        model = pair[0]
+    elif name in STUDY_MODELS:
+        models = _load_study_models(name)
+        if not models:
+            raise HTTPException(503, f"no checkpoint for '{name}' on the server")
+        model = models[0]
+    else:
+        raise HTTPException(404, "name must be sagittal | multiplane | fusion | report")
+    lines = []
+    model.summary(line_length=100, print_fn=lines.append)
+    return {"name": name, "parameters": int(model.count_params()), "summary": "\n".join(lines)}
+
+
 # ---------------------------------------------------------------------------
 # My reports -- create / update / delete, backed by the JSON file above
 # ---------------------------------------------------------------------------
 
-@app.post("/create/{study_uid}/sequence_report",
+@app.post("/create/{study_uid}/sequence_report", tags=["reports"],
           response_model=StoredReport, status_code=201)
 def create_report(study_uid: str, body: ReportIn):
     """Write a new report. 409 if one already exists -- overwriting is PUT's
@@ -404,7 +738,8 @@ def create_report(study_uid: str, body: ReportIn):
     return record
 
 
-@app.put("/update/{study_uid}/sequence_report", response_model=StoredReport)
+@app.put("/update/{study_uid}/sequence_report", tags=["reports"],
+         response_model=StoredReport)
 def update_report(study_uid: str, body: ReportIn):
     """Replace an existing report. 404 if there is nothing to replace."""
     reports = load_reports()
@@ -417,7 +752,7 @@ def update_report(study_uid: str, body: ReportIn):
     return existing
 
 
-@app.delete("/delete/{study_uid}/sequence_report")
+@app.delete("/delete/{study_uid}/sequence_report", tags=["reports"])
 def delete_report(study_uid: str):
     reports = load_reports()
     if reports.pop(study_uid, None) is None:

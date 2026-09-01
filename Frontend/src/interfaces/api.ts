@@ -49,11 +49,12 @@ export interface ServiceInfo {
   docs: string;
 }
 
-/** `GET /health` */
+/** `GET /health` - reports whether the dataset is visible to the server. */
 export interface HealthResponse {
   status: string;
-  model: string;
-  report_model: string;
+  dataset: "ready" | "unavailable";
+  n_studies?: number;
+  detail?: string;
 }
 
 // ─── Studies ──────────────────────────────────────────────────────────────────
@@ -70,6 +71,21 @@ export interface Series {
   fat_suppression: boolean;
   n_slices: number;
   available: boolean;
+}
+
+/** One row of `GET /studies` (the paginated full-corpus listing). */
+export interface StudyListEntry {
+  study_uid: string;
+  golden: boolean;
+  has_report: boolean;
+}
+
+/** `GET /studies` */
+export interface StudiesListResponse {
+  total: number;
+  offset: number;
+  limit: number;
+  studies: StudyListEntry[];
 }
 
 /** One row of `GET /studies/golden`. */
@@ -186,6 +202,50 @@ export interface VerdictRow {
 
 export interface VerdictsResponse {
   rows: VerdictRow[];
+}
+
+/** `POST /upload/{study_uid}/image_sequence` */
+export interface UploadSequenceResponse {
+  study_uid: string;
+  series_uid: string;
+  n_slices: number;
+  stored_at: string;
+  files: string[];
+}
+
+/** A user-written report stored by the backend (NOT a dataset report). */
+export interface StoredReportRecord {
+  study_uid: string;
+  text: string;
+  author: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `GET /view/{study_uid}/information` */
+export interface StudyInformation extends StudyDetail {
+  report: ReportResponse | null;
+  pilkwang_labels: Record<string, LabelAssessment> | null;
+  my_report: StoredReportRecord | null;
+}
+
+/** `GET /view/{study_uid}/3d_image_sequence` - raw mesh for three.js/plotly. */
+export interface Mesh3DResponse {
+  study_uid: string;
+  series_uid: string;
+  plane: Plane;
+  spacing_mm: number[];
+  n_vertices: number;
+  n_faces: number;
+  vertices: number[][];
+  faces: number[][];
+}
+
+/** `GET /models/{name}/summary` */
+export interface ModelSummaryResponse {
+  name: string;
+  parameters: number;
+  summary: string;
 }
 
 export type CompareWhich = "image" | "report" | "showdown";

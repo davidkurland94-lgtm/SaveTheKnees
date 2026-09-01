@@ -14,6 +14,9 @@ Every cell in the notebook is written once; this module decides where it runs.
 """
 import os
 
+from functions.env import load_env
+
+load_env()   # .env can set STK_API too; the shell environment wins
 STK_API = os.environ.get("STK_API", "").rstrip("/")
 REMOTE = bool(STK_API)
 MODE = f"remote -> {STK_API}" if REMOTE else "local"

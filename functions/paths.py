@@ -6,10 +6,11 @@ WHEN THIS IS USED
     take paths as arguments so a test or a notebook can point them anywhere.
 
 """
+import os
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DATA = REPO_ROOT / "data"
+DATA = Path(os.environ.get("DATA_ROOT", REPO_ROOT / "data"))
 
 # --- point these at the real data when it lands -------------------------------
 TRAIN_IMAGES = DATA / "train_series"                   # <study>/<series>/*.dcm
