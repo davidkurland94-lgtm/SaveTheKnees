@@ -24,6 +24,7 @@ import type { AsyncState } from "@/lib";
 import {
   cn,
   createPromiseCache,
+  groupBySeverity,
   joinParts,
   npyToVolume,
   patientOf,
@@ -38,7 +39,7 @@ import ReportPanel from "@/components/studies/ReportPanel";
 import SeriesList from "@/components/studies/SeriesList";
 import Dicom3DViewer from "@/components/viewer/Dicom3DViewer";
 import DicomMprViewer from "@/components/viewer/DicomMprViewer";
-import FindingList from "@/components/viewer/FindingList";
+import FindingList, { AttentionFlag } from "@/components/viewer/FindingList";
 
 /**
  * The two models this page offers, in the order the pipeline produces them.
@@ -548,6 +549,13 @@ function ModelTab({
     [key],
   );
 
+  // Grouped once here rather than inside the list: the flagged band is lifted
+  // out and pinned above the scroll area, so the two consumers need the same
+  // split and must not disagree about it.
+  const groups = prediction.data
+    ? groupBySeverity(toFindings(prediction.data.predictions, { truth, sortByProbability: true }))
+    : null;
+
   const active = MODELS.find((entry) => entry.id === model) ?? MODELS[0];
   // An uploaded study missing a plane is scored by whatever the server could
   // actually run, and it says which in the response. Believing the request
@@ -593,6 +601,11 @@ function ModelTab({
         <p className="text-xs text-muted-foreground">{active.hint}</p>
       </div>
 
+      {/* Above everything the panel has to say about this study, and outside the
+          scroll area, because a flag a reader has to scroll to find is not a
+          flag. */}
+      {groups && <AttentionFlag findings={groups.moderate} />}
+
       {!hasReport && (
         <p className="shrink-0 rounded-xl border border-dashed border-border px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
           Images only so far. The report model has nothing to read until a report
@@ -611,11 +624,11 @@ function ModelTab({
           <Loading label={`Running the ${model} model…`} />
         ) : prediction.error ? (
           <ErrorState message={prediction.error} onRetry={prediction.reload} />
-        ) : prediction.data ? (
+        ) : groups ? (
           <div className="rounded-2xl border border-border p-5">
             <FindingList
-              findings={toFindings(prediction.data.predictions, { truth, sortByProbability: true })}
-              note={truth ? "Green notches mark the hand-labelled positives." : undefined}
+              groups={groups}
+              note={truth ? "Hand-labelled ground truth is shown beside each finding." : undefined}
             />
           </div>
         ) : null}

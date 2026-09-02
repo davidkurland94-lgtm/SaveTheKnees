@@ -3,8 +3,8 @@ import type { Severity, Verdict } from "@/interfaces";
 
 const SEVERITY_TONE: Record<Severity, string> = {
   high: "bg-red-50 text-red-600 border-red-100",
-  moderate: "bg-amber-50 text-amber-600 border-amber-100",
-  low: "bg-muted text-muted-foreground border-border",
+  moderate: "bg-amber-50 text-amber-700 border-amber-200",
+  low: "bg-emerald-50 text-emerald-700 border-emerald-100",
 };
 
 const BASE = "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium";
