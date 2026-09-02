@@ -2,10 +2,10 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router";
 
 import type { StudyListEntry } from "@/interfaces";
-import { cn, paths, shortUid } from "@/lib";
-import { EmptyState, Icon } from "@/components/ui";
+import { cn, matchesPatient, patientOf, paths } from "@/lib";
+import { Avatar, EmptyState, Icon } from "@/components/ui";
 
-const COLUMNS = ["Study UID", "", ""];
+const COLUMNS = ["Patient", "", ""];
 
 interface StudyTableProps {
   /** One page of `GET /studies`, already fetched by the page. */
@@ -46,9 +46,9 @@ export function StudyTable({
   // search to exist first. The placeholder says so rather than implying a
   // corpus-wide hit.
   const rows = useMemo(() => {
-    const query = search.trim().toLowerCase();
+    const query = search.trim();
     if (!query) return studies;
-    return studies.filter((entry) => entry.study_uid.toLowerCase().includes(query));
+    return studies.filter((entry) => matchesPatient(entry.study_uid, query));
   }, [studies, search]);
 
   const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -71,7 +71,7 @@ export function StudyTable({
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Filter this page by UID…"
+            placeholder="Filter this page by name or MRN…"
             aria-label="Filter the studies on this page"
             className="flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-subtle"
           />
@@ -110,9 +110,7 @@ export function StudyTable({
                 {rows.map((entry) => (
                   <tr key={entry.study_uid} className="transition-colors hover:bg-card">
                     <td className="border-b border-border-soft px-4 py-3">
-                      <span className="font-mono text-xs text-foreground" title={entry.study_uid}>
-                        {shortUid(entry.study_uid, 24)}
-                      </span>
+                      <PatientCell uid={entry.study_uid} />
                     </td>
                     <td className="border-b border-border-soft px-4 py-3">
                       <div className="flex flex-wrap gap-1">
@@ -167,6 +165,23 @@ export function StudyTable({
         </div>
       </div>
     </section>
+  );
+}
+
+/** The avatar, name and record line that stand in for the study UID. */
+function PatientCell({ uid }: { uid: string }) {
+  const patient = patientOf(uid);
+  return (
+    <div className="flex items-center gap-3">
+      <Avatar patient={patient} />
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-foreground">{patient.name}</p>
+        <p className="text-[11px] tabular-nums text-muted-foreground">
+          {patient.age}
+          {patient.sex} · MRN {patient.mrn}
+        </p>
+      </div>
+    </div>
   );
 }
 

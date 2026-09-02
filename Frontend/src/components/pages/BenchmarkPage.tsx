@@ -3,7 +3,7 @@ import { Link } from "react-router";
 
 import { getReportTable, getReportVerdicts } from "@/api";
 import type { ReportTableRow } from "@/interfaces";
-import { cn, paths, shortUid, useAsync } from "@/lib";
+import { cn, patientOf, paths, useAsync } from "@/lib";
 import { ErrorState, Icon, Loading, NavBar } from "@/components/ui";
 
 type Tab = "table" | "verdicts";
@@ -196,13 +196,7 @@ function VerdictsTable() {
                 )}
               >
                 <td className="px-4 py-3">
-                  <Link
-                    to={paths.study(row.StudyInstanceUID)}
-                    title={row.StudyInstanceUID}
-                    className="font-mono text-xs text-primary hover:underline"
-                  >
-                    {shortUid(row.StudyInstanceUID, 14)}
-                  </Link>
+                  <PatientCell uid={row.StudyInstanceUID} />
                 </td>
                 <td className="max-w-56 px-4 py-3 text-xs text-foreground">{row.report_says}</td>
                 <td className="max-w-56 px-4 py-3 text-xs text-muted-foreground">
@@ -218,6 +212,19 @@ function VerdictsTable() {
         </table>
       </div>
     </div>
+  );
+}
+
+/** A verdict row's study, named rather than numbered, linking to the study. */
+function PatientCell({ uid }: { uid: string }) {
+  const patient = patientOf(uid);
+  return (
+    <>
+      <Link to={paths.study(uid)} className="text-xs font-medium text-primary hover:underline">
+        {patient.name}
+      </Link>
+      <p className="text-[10px] tabular-nums text-subtle">MRN {patient.mrn}</p>
+    </>
   );
 }
 

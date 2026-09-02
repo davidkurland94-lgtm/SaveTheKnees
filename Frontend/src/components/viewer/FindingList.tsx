@@ -1,18 +1,14 @@
 import type { Finding } from "@/interfaces";
-import { percent, primaryFinding } from "@/lib";
 import { ProbabilityBar, SeverityBadge, VerdictBadge } from "@/components/ui";
 
 interface FindingListProps {
   findings: Finding[];
   /** Rendered above the list — where the numbers came from. */
   note?: string;
-  showPrimary?: boolean;
 }
 
 /** The shared renderer for any set of twelve label probabilities. */
-export function FindingList({ findings, note, showPrimary = true }: FindingListProps) {
-  const primary = showPrimary ? primaryFinding(findings) : null;
-
+export function FindingList({ findings, note }: FindingListProps) {
   return (
     <div className="flex flex-col gap-5">
       {note && (
@@ -41,17 +37,6 @@ export function FindingList({ findings, note, showPrimary = true }: FindingListP
           </div>
         ))}
       </div>
-
-      {primary && (
-        <div className="rounded-xl border border-red-100 bg-red-50 p-4">
-          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-700">
-            Highest probability
-          </p>
-          <p className="text-sm font-medium text-red-800">
-            {primary.label} — {percent(primary.probability)}
-          </p>
-        </div>
-      )}
     </div>
   );
 }

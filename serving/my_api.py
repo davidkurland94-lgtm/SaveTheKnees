@@ -857,6 +857,20 @@ def predict_report_text(body: ReportTextIn):
                             predictions={l: float(p) for l, p in zip(LABELS, probs)})
 
 
+@app.get("/predict/report/terms", tags=["predict"])
+def report_terms():
+    """The medical dictionary POST /predict/report counts as features.
+
+    The same list the report branch of the fusion model sees, served so a
+    reader can be shown which of these terms a report actually uses. An empty
+    list is a real answer, not an error: the dictionary is data, and a
+    deployment without the file simply scores reports on TF-IDF alone.
+    """
+    from models.report_model import medical_terms
+    terms = [t.strip() for t in medical_terms()]
+    return {"count": len(terms), "terms": terms}
+
+
 # ---------------------------------------------------------------------------
 # Evaluation -- the referee's tables and model cards, what the notebook's
 # remote mode reads. Thin JSON views over models/evaluate_labels.py and

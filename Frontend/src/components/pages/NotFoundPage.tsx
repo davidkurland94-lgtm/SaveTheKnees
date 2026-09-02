@@ -16,8 +16,8 @@ export function NotFoundPage() {
           </div>
           <h1 className="text-2xl text-foreground">Page not found</h1>
           <p className="text-sm text-muted-foreground">
-            Nothing lives at <span className="break-all font-mono text-xs">{pathname}</span>. A
-            study opens at <span className="font-mono text-xs">/&#123;StudyInstanceUID&#125;</span>.
+            Nothing lives at <span className="break-all font-mono text-xs">{pathname}</span>. Open
+            a study from the list instead.
           </p>
           <Link
             to={paths.home}

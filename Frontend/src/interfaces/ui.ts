@@ -40,3 +40,22 @@ export interface Finding {
   verdict?: Verdict;
   confidence?: number;
 }
+
+/**
+ * A study's on-screen identity, derived from its UID by `lib/patients.ts`.
+ *
+ * Entirely synthetic. The corpus is de-identified and carries no demographics,
+ * so these fields exist to make the showcase legible — never to be read as
+ * something the dataset knows about a real person.
+ */
+export interface PatientIdentity {
+  name: string;
+  /** Two letters for the avatar. */
+  initials: string;
+  /** Medical record number, digits only; views add the `MRN` prefix. */
+  mrn: string;
+  age: number;
+  sex: "F" | "M";
+  /** Tailwind background/text pair for the avatar. */
+  tone: string;
+}

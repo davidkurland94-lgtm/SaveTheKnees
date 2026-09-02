@@ -18,6 +18,7 @@ import type {
   PredictionResponse,
   ReportLang,
   ReportPredictionResponse,
+  ReportTermsResponse,
   ReportResponse,
   ReportTableResponse,
   SeriesInstancesResponse,
@@ -220,6 +221,11 @@ export function predictReport(
   return postJson<ReportPredictionResponse>("/predict/report", { text }, { signal });
 }
 
+/** `GET /predict/report/terms` — the terms the report model counts as features. */
+export function getReportTerms(signal?: AbortSignal): Promise<ReportTermsResponse> {
+  return requestJson<ReportTermsResponse>("/predict/report/terms", { signal });
+}
+
 // ─── Benchmark report ─────────────────────────────────────────────────────────
 
 /** `GET /report/table` — every reader scored against the 58 gold studies. */
@@ -308,6 +314,7 @@ export const api = {
   seriesPreviewUrl,
   predictSeries,
   predictReport,
+  getReportTerms,
   getReportTable,
   getReportCompare,
   getReportVerdicts,
