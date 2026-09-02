@@ -294,6 +294,33 @@ export function DicomMprViewer({
           })),
         );
 
+        // Awaited: this reads geometry off the first, middle and last instance,
+        // which is what fixes the volume's shape and orientation.
+        const volume = await volumeLoader.createAndCacheVolume(volumeId, {
+          imageIds,
+        });
+        if (cancelled) return;
+        builtVolumes.current.add(volumeId);
+
+        // Not awaited: the remaining frames stream in behind this and the panes
+        // fill as they land. Awaiting it would hold three blank canvases until
+        // the last slice of a 300-image series arrived.
+        if ("load" in volume) volume.load();
+
+        await setVolumesForViewports(engine, [{ volumeId }], viewportIds);
+        if (cancelled) return;
+
+        // Tools only once the volumes are attached — the same ordering, and for
+        // the same reason, as in `Dicom3DViewer`: a Cornerstone tool may reach
+        // straight for `viewport.getDefaultActor().actor`, which does not exist
+        // until then. The crosshairs also compute their centre from the
+        // viewport cameras when they go active, and those are only meaningful
+        // once there is a volume to frame.
+        // Destroyed before created for the reason spelled out in
+        // `Dicom3DViewer`: a surviving group under this ID would leave
+        // `createToolGroup` returning undefined and the stale one attached.
+        // A no-op when there is nothing to destroy.
+        ToolGroupManager.destroyToolGroup(toolGroupId);
         const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
         if (!toolGroup) throw new Error("Could not create the tool group.");
 
@@ -314,22 +341,6 @@ export function DicomMprViewer({
           toolGroup.setToolActive(name, { bindings });
         }
         for (const viewportId of viewportIds) toolGroup.addViewport(viewportId, engineId);
-
-        // Awaited: this reads geometry off the first, middle and last instance,
-        // which is what fixes the volume's shape and orientation.
-        const volume = await volumeLoader.createAndCacheVolume(volumeId, {
-          imageIds,
-        });
-        if (cancelled) return;
-        builtVolumes.current.add(volumeId);
-
-        // Not awaited: the remaining frames stream in behind this and the panes
-        // fill as they land. Awaiting it would hold three blank canvases until
-        // the last slice of a 300-image series arrived.
-        if ("load" in volume) volume.load();
-
-        await setVolumesForViewports(engine, [{ volumeId }], viewportIds);
-        if (cancelled) return;
 
         engine.render();
         setLoading(false);
@@ -419,7 +430,13 @@ export function DicomMprViewer({
                       elementRefs.current[at] = element;
                     }}
                     onContextMenu={(event) => event.preventDefault()}
-                    className="h-full w-full touch-none select-none"
+                    className={cn(
+                      "h-full w-full touch-none select-none",
+                      // No pointer event reaches a tool before there is a volume
+                      // for it to act on; the loading overlay does not stop them
+                      // on its own, being `pointer-events-none`.
+                      !built && "pointer-events-none",
+                    )}
                   />
                   <span
                     className="pointer-events-none absolute left-2 top-2 rounded bg-black/60 px-2 py-0.5 font-mono text-[11px]"

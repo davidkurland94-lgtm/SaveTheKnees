@@ -328,23 +328,26 @@ function SeriesPanel({
  * What the right-hand panel is showing.
  *
  * Two answers to two different questions, which is why they are a switch rather
- * than two panels. "Volume" is the model's input rendered as a whole — the
- * thing the scores in the rail were computed from. "Reference" is the study's
- * own DICOM, where the geometry survives, so it is the only place a length is
- * in millimetres and a point marked in one plane can be found in the others.
+ * than two panels. "Reference" is the study's own DICOM, where the geometry
+ * survives — the only place a length is in millimetres and a point marked in
+ * one plane can be found in the others. "Volume" is the model's input rendered
+ * whole, which is what the scores in the rail were actually computed from.
  *
- * Volume is the default because it is the one that matches the rest of the
- * page. Reference is a step out to the source, taken deliberately — and paid
- * for only then: its series is a far larger download than the tensor, and its
- * loader another 3 MB of codecs, so neither is fetched until it is chosen.
+ * Reference leads, and is the default. It is the study as the scanner wrote it,
+ * which is what a doctor opens a study to look at; the model's view of it is
+ * the second question, asked once the first has been answered.
+ *
+ * Neither has to be waited for, because neither is fetched on demand — see the
+ * two requests in `SeriesViewers`, which both start as soon as the series is
+ * known, whichever panel is on screen.
  */
 const PANEL_VIEWS = [
-  { id: "volume", label: "Volume", hint: "The model's input, rendered whole" },
   {
     id: "reference",
     label: "Reference",
     hint: "The study's own DICOM: three planes, measurable",
   },
+  { id: "volume", label: "Volume", hint: "The model's input, rendered whole" },
 ] as const;
 
 type PanelView = (typeof PANEL_VIEWS)[number]["id"];
@@ -409,7 +412,7 @@ function SeriesViewers({
 }) {
   const available = series.filter((entry) => entry.available);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [panel, setPanel] = useState<PanelView>("volume");
+  const [panel, setPanel] = useState<PanelView>("reference");
   // Falls back to the first series until one is picked, and again if the page
   // swaps to a study that does not have the previously selected series.
   const active =
@@ -422,6 +425,11 @@ function SeriesViewers({
   // uploaded would be paid for and then thrown away.
   const volumes = useRef(new Map<string, ModelVolume>());
 
+  // Deliberately ungated by `panel`: the tensor is fetched even while the
+  // reference view is the one on screen, so that switching to the volume is a
+  // render rather than a wait. It is the slow half of this page — the server
+  // rebuilds it from raw DICOM, a couple of seconds before a byte is sent — and
+  // there is nothing to gain by not having started.
   const tensors = useAsync(
     async (signal) => {
       if (!activeId) return null;
@@ -436,9 +444,10 @@ function SeriesViewers({
     [studyUid, activeId],
   );
 
-  // Only fetched once the reference view is actually on screen — see
-  // `PANEL_VIEWS`. Returning null while it is not keeps `useAsync` from
-  // reporting a permanent "loading", which the empty label would show.
+  // The list of file names, which is cheap; the pixels behind them are streamed
+  // by Cornerstone and cached there. Gated on the panel only so that a reader
+  // who has moved to the volume does not re-list on the way back and forth —
+  // the reference view being the default, this fetches on load either way.
   const instances = useAsync(
     async (signal) => {
       if (!activeId || panel !== "reference") return null;

@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import {
   CONSTANTS,
   Enums,
+  getEnabledElement,
   RenderingEngine,
   setVolumesForViewports,
   type Types,
@@ -14,6 +15,7 @@ import {
   ToolGroupManager,
   TrackballRotateTool,
   ZoomTool,
+  type Types as ToolTypes,
 } from "@cornerstonejs/tools";
 
 import type { ViewerStack } from "@/interfaces";
@@ -112,6 +114,22 @@ function registerPresets(): void {
   }
 }
 
+class SafeTrackballRotateTool extends TrackballRotateTool {
+  static toolName = "SafeTrackballRotate";
+
+  constructor(props?: ToolTypes.PublicToolProps, defaults?: ToolTypes.ToolProps) {
+    super(props, defaults);
+    // The base assigns this in its own constructor, so it is an instance
+    // property by now and can be wrapped rather than overridden.
+    const inherited = this.preMouseDownCallback;
+    this.preMouseDownCallback = (evt: ToolTypes.EventTypes.InteractionEventType) => {
+      const viewport = getEnabledElement(evt.detail.element)?.viewport;
+      if (!viewport?.getDefaultActor()) return true;
+      return inherited(evt);
+    };
+  }
+}
+
 const { KeyboardBindings, MouseBindings } = ToolEnums;
 
 /**
@@ -124,7 +142,7 @@ const { KeyboardBindings, MouseBindings } = ToolEnums;
  * plain-drag and shift-drag resolve to different tools without ambiguity.
  */
 const BINDINGS = [
-  { tool: TrackballRotateTool.toolName, bindings: [{ mouseButton: MouseBindings.Primary }] },
+  { tool: SafeTrackballRotateTool.toolName, bindings: [{ mouseButton: MouseBindings.Primary }] },
   {
     tool: PanTool.toolName,
     bindings: [
@@ -157,7 +175,7 @@ let toolsRegistered = false;
 
 function registerTools(): void {
   if (toolsRegistered) return;
-  for (const tool of [TrackballRotateTool, PanTool, ZoomTool]) addTool(tool);
+  for (const tool of [SafeTrackballRotateTool, PanTool, ZoomTool]) addTool(tool);
   registerPresets();
   toolsRegistered = true;
 }
@@ -301,13 +319,6 @@ export function Dicom3DViewer({
           },
         ]);
 
-        const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
-        for (const { tool, bindings } of BINDINGS) {
-          toolGroup?.addTool(tool);
-          toolGroup?.setToolActive(tool, { bindings });
-        }
-        toolGroup?.addViewport(viewportId, engineId);
-
         // Synchronous: the page already holds every voxel, so there is nothing
         // to stream and no partial state to paint around.
         buildModelVolume(volumeId, volume, active?.spacingMm);
@@ -315,6 +326,15 @@ export function Dicom3DViewer({
 
         await setVolumesForViewports(engine, [{ volumeId }], [viewportId]);
         if (cancelled) return;
+
+        ToolGroupManager.destroyToolGroup(toolGroupId);
+        const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
+        if (!toolGroup) throw new Error("Could not create the tool group.");
+        for (const { tool, bindings } of BINDINGS) {
+          toolGroup.addTool(tool);
+          toolGroup.setToolActive(tool, { bindings });
+        }
+        toolGroup.addViewport(viewportId, engineId);
 
         engine.getViewport<Types.IVolumeViewport>(viewportId)?.setProperties({ preset: mode });
         engine.render();
@@ -392,7 +412,12 @@ export function Dicom3DViewer({
             <div
               ref={elementRef}
               onContextMenu={(event) => event.preventDefault()}
-              className="absolute inset-0 touch-none select-none"
+              className={cn(
+                "absolute inset-0 touch-none select-none",
+                // Belt and braces alongside the ordering above: no pointer event
+                // reaches a tool until there is something for it to act on.
+                !built && "pointer-events-none",
+              )}
             />
 
             {!built && (

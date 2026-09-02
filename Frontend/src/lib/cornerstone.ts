@@ -34,9 +34,10 @@ const MAX_WORKERS = 4;
  * that reads the study's actual files.
  *
  * Imported dynamically, and that is the point rather than a detail: the loader
- * drags in four WASM codecs and a worker script, about 3 MB, and a reader who
- * never opens the reference view should never pay for them. A static import
- * would put all of it in the entry chunk.
+ * drags in four WASM codecs and a worker script, about 3 MB. The reference view
+ * is a study page's default now, so a study page does pay for it — but the
+ * listing, the benchmark and the upload flow never open a viewer at all, and a
+ * static import would put the whole 3 MB in the entry chunk they all share.
  */
 export function initDicomLoader(): Promise<void> {
   dicomStarted ??= (async () => {
@@ -87,6 +88,14 @@ export function buildModelVolume(
   if (cache.getVolume(volumeId)) return;
 
   const [slices, rows, columns] = volume.shape;
+
+  // Below, `createLocalVolume` creates one image per slice named
+  // `${volumeId}_slice_${i}` and throws rather than overwriting if one is
+  // already cached. `releaseVolume` normally takes them out with the volume,
+  // but a volume evicted under cache pressure leaves its images behind, and
+  // then this build would die with "imageId already in cache" — showing that
+  // message in the panel instead of the volume. Cheap to make certain.
+  purgeImages(Array.from({ length: slices }, (_, i) => `${volumeId}_slice_${i}`));
   // The tensor is C-ordered `(slice, row, column)`, so columns vary fastest —
   // which is exactly the `(i, j, k)` a Cornerstone volume expects.
   const dimensions: Types.Point3 = [columns, rows, slices];
@@ -128,7 +137,41 @@ export function buildModelVolume(
   });
 }
 
-/** Drops a volume built here, if it is still cached. */
+/**
+ * Drops a volume built here, and the per-slice images it was built from.
+ *
+ * Both halves matter, and the second one is not obvious.
+ * `cache.removeVolumeLoadObject` deletes the volume but deliberately leaves its
+ * images in the image cache — it only clears their `sharedCacheKey`. Meanwhile
+ * `createLocalVolume` refuses to re-create an image that is already there:
+ * `putImageSync` throws "imageId already in cache" rather than overwriting. So
+ * a volume released without its images can never be rebuilt, which is exactly
+ * what the viewer asks for every time it unmounts and comes back.
+ *
+ * They are also 4.6 MB a series, so leaving them behind leaks that much per
+ * mount, per series, for as long as the tab is open.
+ */
 export function releaseVolume(volumeId: string): void {
-  if (cache.getVolumeLoadObject(volumeId)) cache.removeVolumeLoadObject(volumeId);
+  const volume = cache.getVolume(volumeId);
+  if (!volume) return;
+  // Read the IDs off the volume rather than reconstructing `createLocalVolume`'s
+  // naming scheme here — it owns that, and the volume is what knows.
+  const imageIds = [...(volume.imageIds ?? [])];
+  cache.removeVolumeLoadObject(volumeId);
+  purgeImages(imageIds);
+}
+
+/**
+ * Removes cached images, forcing past the shared-cache-key guard.
+ *
+ * Forcing is safe here and is the point: every caller below has already
+ * established that no volume owns these any more, and they are rebuildable in
+ * milliseconds from the tensor the page is still holding.
+ */
+function purgeImages(imageIds: readonly string[]): void {
+  for (const imageId of imageIds) {
+    if (cache.getImageLoadObject(imageId)) {
+      cache.removeImageLoadObject(imageId, { force: true });
+    }
+  }
 }
