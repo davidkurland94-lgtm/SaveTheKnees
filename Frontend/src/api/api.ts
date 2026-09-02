@@ -282,15 +282,15 @@ export function view2dUrl(studyUid: string, options?: { seriesUid?: string; plan
 }
 
 /**
- * The doctor's report, saved without the caller having to know whether the
+ * The report, saved without the caller having to be right about whether the
  * study already has one.
  *
  * `POST` is a create and answers 409 on a study that already has a report;
- * `PUT` is a replace and answers 404 on one that does not. Which of the two
- * applies is server state, and the page's copy of it can be a minute old — a
- * second tab, or a colleague, may have written one in between. So the create is
- * tried first and its 409 is the signal to replace, rather than a guess made
- * here being the thing that decides.
+ * `PUT` is a replace and answers 404 on one that does not. Which applies is
+ * server state, and the page's copy of it can be stale — a second tab, or a
+ * colleague, may have written one in between. So `exists` picks which to try
+ * FIRST, and the other is the recovery: one request in the ordinary case, two
+ * only when the page's idea of the world turned out to be wrong.
  *
  * The server translates on the way in, so what comes back carries both the text
  * as written and the English the models read.
@@ -298,14 +298,21 @@ export function view2dUrl(studyUid: string, options?: { seriesUid?: string; plan
 export async function saveStudyReport(
   studyUid: string,
   text: string,
-  author = "team",
-  signal?: AbortSignal,
+  options: { exists?: boolean; author?: string; signal?: AbortSignal } = {},
 ): Promise<StoredReportRecord> {
+  const { exists = false, author = "team", signal } = options;
+  const create = () => createStudyReport(studyUid, text, author, signal);
+  const replace = () => updateStudyReport(studyUid, text, author, signal);
+  const [first, fallback] = exists ? [replace, create] : [create, replace];
+
   try {
-    return await createStudyReport(studyUid, text, author, signal);
+    return await first();
   } catch (cause) {
-    if (cause instanceof ApiError && cause.status === 409) {
-      return updateStudyReport(studyUid, text, author, signal);
+    // 409 from a create ("already exists") and 404 from a replace ("nothing to
+    // replace") are the same news: this study's report is not in the state we
+    // thought. Either way the other verb is the right one.
+    if (cause instanceof ApiError && (cause.status === 409 || cause.status === 404)) {
+      return fallback();
     }
     throw cause;
   }

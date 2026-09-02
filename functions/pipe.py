@@ -58,9 +58,9 @@ else:
     def model_summary(name):
         """Print a trained model's Keras summary from the local checkpoint."""
         import keras
-        from functions.predict import REPO_ROOT, STUDY_MODELS
-        path = REPO_ROOT / "models" / ("report_model.keras" if name == "report"
-                                       else STUDY_MODELS[name][0])
+        from functions.predict import STUDY_MODELS, model_file
+        path = model_file("report_model.keras" if name == "report"
+                          else STUDY_MODELS[name][0])
         m = keras.saving.load_model(path, compile=False)
         print(f"{name} -- {m.count_params():,} parameters")
         m.summary(line_length=100)

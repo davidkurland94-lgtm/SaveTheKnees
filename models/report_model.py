@@ -18,6 +18,8 @@ from functions.labels import LABELS, derived_labels, gold_labels
 # with only keras + sklearn on board.
 TRANSLATIONS_CSV = paths.DATA / "meta" / "reports_en.csv"
 
+# Where TRAINING writes. Serving reads through functions.predict.model_file,
+# which falls back to the /mnt/models mount -- see load_report_predictor.
 MODEL_PATH = paths.REPO_ROOT / "models" / "report_model.keras"
 MEDICAL_TERMS = paths.DATA / "meta" / "medical_terms.txt"
 
@@ -167,10 +169,26 @@ def train(epochs=30, max_features=20000, patience=5, seed=0, ngram_max=2,
 _predictor = None
 
 
-def load_report_predictor(model_path=MODEL_PATH, vectorizer_path=VECTORIZER_PATH):
+def load_report_predictor(model_path=None, vectorizer_path=None):
+    """(model, vectorizer) for scoring report text.
+
+    Resolved through functions.predict.model_file rather than through
+    MODEL_PATH/VECTORIZER_PATH above, because those two are where TRAINING
+    WRITES -- the repo's models/ -- and serving reads somewhere else. In the
+    container the repo copy does not exist and the weights come off the
+    /mnt/models bucket mount; hardcoding the repo path here is what made
+    POST /predict/report answer 503 on every deployment.
+
+    Imported inside the function on purpose: functions.predict imports keras at
+    module level, and this module is imported by API paths (medical_terms, the
+    dictionary route) that must stay light.
+    """
     import keras
-    model = keras.saving.load_model(model_path, compile=False)
-    return model, joblib.load(vectorizer_path)
+    from functions.predict import model_file
+
+    model_path = model_path or model_file(MODEL_PATH.name)
+    vectorizer_path = vectorizer_path or model_file(VECTORIZER_PATH.name)
+    return keras.saving.load_model(model_path, compile=False), joblib.load(vectorizer_path)
 
 
 def predict_report_text(text):

@@ -21,7 +21,8 @@ export type IconName =
   | "layers"
   | "cube"
   | "reset"
-  | "lock";
+  | "lock"
+  | "save";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   logo: (
@@ -73,6 +74,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <line x1="19" y1="12" x2="5" y2="12" />
       <polyline points="12 19 5 12 12 5" />
+    </>
+  ),
+  save: (
+    <>
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+      <polyline points="17 21 17 13 7 13 7 21" />
+      <polyline points="7 3 7 8 15 8" />
     </>
   ),
   lock: (

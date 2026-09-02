@@ -67,11 +67,18 @@ export async function requestJson<T>(path: string, options?: RequestOptions): Pr
   return response.json() as Promise<T>;
 }
 
-/** POST a JSON body and read a JSON response. */
+/**
+ * Send a JSON body and read a JSON response. POST unless the caller says otherwise.
+ *
+ * `method` is a DEFAULT here, not a fixed value. It used to be spread after
+ * `...options`, which silently overwrote it: `updateStudyReport` asks for PUT,
+ * got POST, and `PUT /update/{uid}/sequence_report` answered 405 for every
+ * report anyone tried to edit.
+ */
 export function postJson<T>(path: string, payload: unknown, options?: RequestOptions): Promise<T> {
   return requestJson<T>(path, {
     ...options,
-    method: "POST",
+    method: options?.method ?? "POST",
     body: JSON.stringify(payload),
     headers: { "Content-Type": "application/json", ...(options?.headers ?? {}) },
   });

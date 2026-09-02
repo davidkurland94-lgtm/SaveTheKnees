@@ -383,22 +383,25 @@ def predict_with_model(study_uid: str,
     """
     from functions.predict import predict_study_with
     try:
-        # An uploaded study has no cached tensor -- the cache was built once,
-        # offline, for the corpus -- so it is scored straight off its DICOM.
+        # The report a doctor has saved here is the fusion model's fourth input,
+        # for BOTH kinds of study. Read at request time rather than at upload
+        # time, because it is written afterwards -- that is the whole order of
+        # the workflow. None of it means anything to the two image models.
+        stored = load_reports().get(study_uid) or {}
+        report_text = stored.get("report_en") or stored.get("text")
+
         record = uploads.get(study_uid)
         if record is not None:
-            # The doctor's report is the fusion model's fourth input. Read at
-            # request time rather than at upload time, because it is written
-            # after the upload -- that is the whole order of the workflow.
-            stored = load_reports().get(study_uid) or {}
-            predictions, used = predict_uploaded(record, model,
-                                                 report_text=stored.get("report_en")
-                                                 or stored.get("text"))
+            # An uploaded study has no cached tensor, so it is scored straight
+            # off its DICOM.
+            predictions, used = predict_uploaded(record, model, report_text=report_text)
             if predictions is None:
                 raise HTTPException(422, f"Could not build tensors for {study_uid}")
             return {"study_uid": study_uid, "model": used, "predictions": predictions}
 
-        result = predict_study_with(study_uid, model)
+        # A corpus study falls back to reports_en.csv when nothing is stored,
+        # which is what it shipped with.
+        result = predict_study_with(study_uid, model, report_text=report_text)
     except FileNotFoundError as exc:
         raise HTTPException(503, str(exc)) from exc
     if result is None:

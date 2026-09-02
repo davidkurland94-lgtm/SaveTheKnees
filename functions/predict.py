@@ -113,12 +113,19 @@ def predict_study(study_uid, axis="X", data_root=None):
 # report for fusion) only exist server-side, in the tensor + translation caches.
 # ---------------------------------------------------------------------------
 
-def _model_file(fname):
+def model_file(fname):
     """One checkpoint: the repo's models/ first, else the Cloud Run mount.
 
-    The serving image ships only the sagittal+report trio (image diet);
-    multiplane and fusion arrive through the bucket mounted at /mnt/models
-    (overridable via MODELS_ROOT)."""
+    The serving image ships only the checkpoints that are in the repo (the
+    image diet keeps the rest out); everything else arrives through the bucket
+    mounted at /mnt/models, overridable via MODELS_ROOT.
+
+    Public, and the ONE way any serving path should name a checkpoint. It used
+    to be private to this module, which is how models/report_model.py came to
+    hardcode `REPO_ROOT / "models"` instead -- a path that does not exist in the
+    container, so /predict/report answered 503 on every deployment while the
+    weights sat in the mount beside the ones this function found.
+    """
     local = REPO_ROOT / "models" / fname
     if local.exists():
         return local
@@ -146,14 +153,14 @@ def _load_study_models(name):
     if name not in _study_models:
         models = []
         for fname in STUDY_MODELS[name]:
-            path = _model_file(fname)
+            path = model_file(fname)
             if path.exists():
                 models.append(keras.saving.load_model(path, compile=False))
         _study_models[name] = models
     return _study_models[name]
 
 
-def predict_study_with(study_uid, model="fusion", data_root=None):
+def predict_study_with(study_uid, model="fusion", data_root=None, report_text=None):
     """StudyInstanceUID -> {label: probability} using the chosen trained model
     ("sagittal" | "multiplane" | "fusion"). Ensembles average their seeds.
 
@@ -161,6 +168,14 @@ def predict_study_with(study_uid, model="fusion", data_root=None):
     fusion, the translated report through the report model's vectorizer.
     Returns None when the study is not cached for that model's inputs, or
     raises FileNotFoundError when the checkpoints are absent.
+
+    report_text overrides the report the fusion model reads, and must be
+    ENGLISH. Without it fusion falls back to reports_en.csv -- the translation
+    cache built once, offline, over the corpus. That cache is a snapshot of what
+    the study shipped with, so a report a doctor has since edited in the app
+    would never reach the model: same study, same images, and an answer computed
+    from text nobody can see any more. The caller passes the stored report when
+    there is one.
     """
     import numpy as np
     import pandas as pd
@@ -179,12 +194,14 @@ def predict_study_with(study_uid, model="fusion", data_root=None):
 
     if model == "fusion":
         import joblib
-        texts = pd.read_csv(data_root / "meta" / "reports_en.csv").set_index("StudyInstanceUID")
-        if study_uid not in texts.index:
-            return None
-        vectorizer = joblib.load(_model_file("report_vectorizer.joblib"))
-        inputs.append(vectorizer.transform([str(texts.loc[study_uid, "report_en"])])
-                                .toarray().astype("float32"))
+        text = report_text
+        if text is None:
+            texts = pd.read_csv(data_root / "meta" / "reports_en.csv").set_index("StudyInstanceUID")
+            if study_uid not in texts.index:
+                return None
+            text = str(texts.loc[study_uid, "report_en"])
+        vectorizer = joblib.load(model_file("report_vectorizer.joblib"))
+        inputs.append(vectorizer.transform([text]).toarray().astype("float32"))
 
     feed = inputs if len(inputs) > 1 else inputs[0]
     probs = np.mean([m.predict(feed, verbose=0)[0] for m in models], axis=0)
@@ -232,7 +249,7 @@ def predict_from_dirs(dirs_by_axis, model="multiplane", report_text=None):
         # predict_study_with and models/train_fusion.py load, so the text
         # features here are identical to the ones the model trained on.
         import joblib
-        vectorizer = joblib.load(_model_file("report_vectorizer.joblib"))
+        vectorizer = joblib.load(model_file("report_vectorizer.joblib"))
         inputs.append(vectorizer.transform([str(report_text)]).toarray().astype("float32"))
 
     feed = inputs if len(inputs) > 1 else inputs[0]

@@ -41,17 +41,22 @@ import Dicom3DViewer from "@/components/viewer/Dicom3DViewer";
 import FindingList from "@/components/viewer/FindingList";
 
 /**
- * The three trained models, in the order the pipeline produces them.
+ * The two models this page offers, in the order the pipeline produces them.
  *
  * Images first, because images are all a study has when it arrives: a folder of
- * DICOM is stored, split into series and scored by the image models before
- * anyone has read it. Fusion is last and gated, because its second input is the
- * report — it cannot run until a doctor has written one, and listing it here
- * greyed out says that far more plainly than hiding it would.
+ * DICOM is stored, split into series and scored by the image model before
+ * anyone has read it. Fusion is second and gated, because its other input is
+ * the report — it cannot run until a doctor has written one, and listing it
+ * here greyed out says that far more plainly than hiding it would.
+ *
+ * Sagittal is not offered. It reads one plane where multiplane reads three, so
+ * on any study that has all three it is strictly the weaker answer, and the
+ * choice between them is not one a doctor should have to make. The server still
+ * falls back to it when a study is missing a plane, and says so through the
+ * `model` it reports — see `served` below.
  */
 const MODELS: Array<{ id: ModelName; label: string; hint: string; needsReport?: true }> = [
   { id: "multiplane", label: "Multiplane", hint: "Images only — sagittal + coronal + axial" },
-  { id: "sagittal", label: "Sagittal", hint: "Images only — single-plane 3D CNN" },
   {
     id: "fusion",
     label: "Fusion",
