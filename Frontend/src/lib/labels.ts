@@ -71,13 +71,6 @@ export function toFindings(scores: LabelScores, options: ToFindingsOptions = {})
   return sortByProbability ? findings.sort((a, b) => b.probability - a.probability) : findings;
 }
 
-/** The single finding to headline, or `null` when nothing clears the bar. */
-export function primaryFinding(findings: Finding[]): Finding | null {
-  const ranked = [...findings].sort((a, b) => b.probability - a.probability);
-  const top = ranked[0];
-  return top && top.probability >= MODERATE_THRESHOLD ? top : null;
-}
-
 /** Names of the positive findings in a ground-truth map. */
 export function positiveLabels(labels: GoldenLabels | null | undefined): string[] {
   if (!labels) return [];

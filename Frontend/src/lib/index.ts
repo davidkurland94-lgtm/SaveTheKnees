@@ -6,6 +6,7 @@ export * from "./format";
 export * from "./labels";
 export * from "./paths";
 export * from "./patients";
+export * from "./promiseCache";
 export * from "./uploadState";
 export * from "./useAsync";
 export * from "./useControlled";

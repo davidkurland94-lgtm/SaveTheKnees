@@ -9,10 +9,20 @@ import {
   seriesInstanceUrl,
   view2dSheet,
 } from "@/api";
-import type { GoldenLabels, ModelName, Series, ViewerSlice, ViewerStack } from "@/interfaces";
+import type {
+  GoldenLabels,
+  ModelName,
+  PatientIdentity,
+  Series,
+  StudyDetail,
+  StudyPredictionResponse,
+  ViewerSlice,
+  ViewerStack,
+} from "@/interfaces";
 import {
   closeSlices,
   cn,
+  createPromiseCache,
   joinParts,
   patientOf,
   paths,
@@ -35,12 +45,24 @@ const MODELS: Array<{ id: ModelName; label: string; hint: string }> = [
   { id: "sagittal", label: "Sagittal", hint: "Single-plane 3D CNN, also behind POST /predict" },
 ];
 
-type Tab = "model" | "labels" | "report" | "series";
+/**
+ * Model runs, kept for as long as the tab is open.
+ *
+ * `GET /studies/{uid}/predict` runs a network over the whole volume and takes
+ * seconds, while its answer for one study and one model never changes. Without
+ * this, flipping between Fusion and Multiplane to compare the two re-runs both
+ * models every time — which is exactly what someone comparing them does.
+ *
+ * A cached response is a few hundred bytes, so the cap is about how many
+ * studies a session visits rather than about memory.
+ */
+const cachedPrediction = createPromiseCache<StudyPredictionResponse>(60);
+
+type Tab = "model" | "labels" | "series";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "model", label: "Model" },
   { id: "labels", label: "Report labels" },
-  { id: "report", label: "Report text" },
   { id: "series", label: "Series" },
 ];
 
@@ -66,79 +88,97 @@ export function StudyPage() {
         </Link>
       </NavBar>
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        {/* The narrow rail: everything the study knows about itself. */}
-        <aside className="flex w-full shrink-0 flex-col gap-6 overflow-y-auto border-b border-border px-5 py-6 lg:w-1/5 lg:min-w-80 lg:max-w-sm lg:border-b-0 lg:border-r">
+      <StudyBanner patient={patient} study={study.data} />
+
+      {/* Reversed, not reordered: on a small screen the rail stacks above the
+          viewers, which is where a panel of findings belongs; `row-reverse`
+          paints it down the right-hand side once there is room for a column. */}
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row-reverse">
+        {/* The narrow rail, on the right: what the models make of the study. */}
+        <aside className="flex w-full shrink-0 flex-col gap-6 overflow-y-auto border-b border-border px-5 py-6 lg:w-1/5 lg:min-w-80 lg:max-w-sm lg:border-b-0 lg:border-l">
           {study.loading ? (
             <Loading label="Loading study…" />
           ) : study.error ? (
             <ErrorState message={study.error} onRetry={study.reload} />
           ) : study.data ? (
             <>
-              <header className="flex flex-col gap-2">
-                <div className="flex items-center gap-3">
-                  <Avatar patient={patient} size="md" />
-                  <div className="min-w-0">
-                    <h1 className="truncate text-xl text-foreground">{patient.name}</h1>
-                    <p className="text-[11px] tabular-nums text-muted-foreground">
-                      {patient.age}
-                      {patient.sex} · MRN {patient.mrn}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  <Chip>{pluralize(study.data.n_series, "series", "series")}</Chip>
-                  {Object.entries(study.data.planes).map(([plane, count]) => (
-                    <Chip key={plane}>
-                      {plane} × {count}
-                    </Chip>
-                  ))}
-                  {study.data.has_report && <Chip>has report</Chip>}
-                </div>
-              </header>
-
               <nav className="flex flex-wrap gap-1 rounded-xl bg-muted p-1">
-                {TABS.map((entry) => {
-                  const disabled = entry.id === "report" && !study.data?.has_report;
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => setTab(entry.id)}
-                      className={cn(
-                        "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
-                        disabled && "cursor-not-allowed opacity-40",
-                        tab === entry.id
-                          ? "bg-white text-primary shadow-sm"
-                          : "text-muted-foreground hover:text-primary",
-                      )}
-                    >
-                      {entry.label}
-                    </button>
-                  );
-                })}
+                {TABS.map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    onClick={() => setTab(entry.id)}
+                    className={cn(
+                      "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
+                      tab === entry.id
+                        ? "bg-white text-primary shadow-sm"
+                        : "text-muted-foreground hover:text-primary",
+                    )}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
               </nav>
 
               {tab === "model" && <ModelTab studyUid={studyUid} truth={study.data.golden_labels} />}
               {tab === "labels" && (
                 <LabelsTab studyUid={studyUid} truth={study.data.golden_labels} />
               )}
-              {tab === "report" && <ReportPanel studyUid={studyUid} />}
               {tab === "series" && <SeriesList series={study.data.series} />}
             </>
           ) : null}
         </aside>
 
-        {/* The wide column: both viewers, full height. */}
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3 xl:flex-row">
-          <SeriesViewers
-            studyUid={studyUid}
-            series={study.data?.series ?? []}
-            loading={study.loading}
-          />
+        {/* The wide column: both viewers, with the written report beneath them. */}
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 xl:flex-row">
+            <SeriesViewers
+              studyUid={studyUid}
+              series={study.data?.series ?? []}
+              loading={study.loading}
+            />
+          </div>
+          {study.data?.has_report && <ReportPanel studyUid={studyUid} />}
         </section>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The band under the nav bar: who the study belongs to, and what is in it.
+ *
+ * Full width and one line deep on purpose. It is the only thing on the page
+ * that both columns need to agree about, and pinning it above them means
+ * neither the viewers nor the findings rail has to spend its own space saying
+ * whose knee this is.
+ *
+ * The identity comes from the UID in the URL, so it paints immediately; only
+ * the study's own facts wait on the request.
+ */
+function StudyBanner({ patient, study }: { patient: PatientIdentity; study: StudyDetail | null }) {
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-card px-5 py-2">
+      <div className="flex min-w-0 items-center gap-3">
+        <Avatar patient={patient} />
+        <h1 className="truncate text-base text-foreground">{patient.name}</h1>
+        <p className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+          {patient.age}
+          {patient.sex} · MRN {patient.mrn}
+        </p>
+      </div>
+
+      {study && (
+        <div className="flex flex-wrap items-center gap-2 lg:ml-auto">
+          <Chip>{pluralize(study.n_series, "series", "series")}</Chip>
+          {Object.entries(study.planes).map(([plane, count]) => (
+            <Chip key={plane}>
+              {plane} × {count}
+            </Chip>
+          ))}
+          {study.has_report && <Chip>has report</Chip>}
+        </div>
+      )}
     </div>
   );
 }
@@ -296,7 +336,9 @@ function SeriesViewers({
 function ModelTab({ studyUid, truth }: { studyUid: string; truth: GoldenLabels | null }) {
   const [model, setModel] = useState<ModelName>("fusion");
   const prediction = useAsync(
-    (signal) => predictStudy(studyUid, model, signal),
+    // No abort signal on purpose: a run cancelled halfway leaves nothing to
+    // cache, and a switch away and back should be the case this makes instant.
+    () => cachedPrediction(`${studyUid}|${model}`, () => predictStudy(studyUid, model)),
     [studyUid, model],
   );
 
@@ -333,7 +375,7 @@ function ModelTab({ studyUid, truth }: { studyUid: string; truth: GoldenLabels |
       ) : prediction.data ? (
         <div className="rounded-2xl border border-border p-5">
           <FindingList
-            findings={toFindings(prediction.data.predictions, { truth })}
+            findings={toFindings(prediction.data.predictions, { truth, sortByProbability: true })}
             note={joinParts([
               `GET /studies/{uid}/predict?model=${model}`,
               truth ? "green notches mark the hand-labelled positives" : null,
@@ -364,8 +406,11 @@ function LabelsTab({ studyUid, truth }: { studyUid: string; truth: GoldenLabels 
       </p>
       <div className="rounded-2xl border border-border p-5">
         <FindingList
-          findings={toFindings(scores, { truth, verdicts: labels.data.labels })}
-          showPrimary={false}
+          findings={toFindings(scores, {
+            truth,
+            verdicts: labels.data.labels,
+            sortByProbability: true,
+          })}
         />
       </div>
     </div>
