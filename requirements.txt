@@ -25,6 +25,16 @@ scipy==1.15.3
 scikit-image==0.25.2
 plotly==7.0.0             # functions/dicom_3d.py imports it at module level
 
+# --- translation ---------------------------------------------------------
+# A report a doctor writes in the app is in whatever language they wrote it in,
+# and everything downstream (the report model, the fusion model's text branch)
+# was trained on English. POST /create|PUT /update translate on the way in, so
+# these two are runtime deps now -- they used to be notebook-only.
+# Both imports are still lazy and guarded: an image built without them saves the
+# report untranslated rather than refusing to save it.
+deep-translator==1.11.4
+langdetect==1.0.9
+
 # --- api -----------------------------------------------------------------
 fastapi==0.141.1
 uvicorn[standard]==0.52.4

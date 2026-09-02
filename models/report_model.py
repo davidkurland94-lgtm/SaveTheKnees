@@ -12,9 +12,10 @@ from functions import paths
 from functions.labels import LABELS, derived_labels, gold_labels
 
 # NOTE: functions.report_translation (deep_translator, langdetect) is imported
-# LAZILY inside the functions that need it. The serving container carries
-# neither package -- predict_report_text and load_report_predictor must import
-# clean with only keras + sklearn on board.
+# LAZILY inside the functions that need it. The serving container now carries
+# both (the report routes translate on save), but the import stays lazy and
+# guarded so predict_report_text and load_report_predictor still import clean
+# with only keras + sklearn on board.
 TRANSLATIONS_CSV = paths.DATA / "meta" / "reports_en.csv"
 
 MODEL_PATH = paths.REPO_ROOT / "models" / "report_model.keras"

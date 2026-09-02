@@ -191,7 +191,7 @@ def predict_study_with(study_uid, model="fusion", data_root=None):
     return {label: float(p) for label, p in zip(LABELS, probs)}
 
 
-def predict_from_dirs(dirs_by_axis, model="multiplane"):
+def predict_from_dirs(dirs_by_axis, model="multiplane", report_text=None):
     """{axis: series directory} -> {label: probability}, straight off the DICOM.
 
     predict_study_with reads the tensor cache, which only exists for the corpus:
@@ -203,6 +203,12 @@ def predict_from_dirs(dirs_by_axis, model="multiplane"):
     axis is "X" sagittal, "Y" coronal, "Z" axial, as everywhere else.
     Returns None when a plane the model needs has no readable series, so the
     caller can fall back rather than serve numbers from a half-empty input.
+
+    report_text is the fourth input the fusion model takes, and it is ENGLISH:
+    the vectorizer was fitted on the translation cache, so a report in another
+    language goes through functions.report_translation first. Fusion without a
+    report returns None -- the missing branch is half the model, and zeroing it
+    would serve a number that no training run ever produced.
     """
     import numpy as np
 
@@ -213,12 +219,22 @@ def predict_from_dirs(dirs_by_axis, model="multiplane"):
     axes = ("X",) if model == "sagittal" else ("X", "Y", "Z")
     if not all(axis in dirs_by_axis for axis in axes):
         return None
+    if model == "fusion" and not str(report_text or "").strip():
+        return None
 
     tensors = [sequence_to_tensor(dirs_by_axis[axis]) for axis in axes]
     if any(x is None for x in tensors):
         return None
 
     inputs = [x[None, ...] for x in tensors]
+    if model == "fusion":
+        # The report model's OWN fitted vectorizer, the same one
+        # predict_study_with and models/train_fusion.py load, so the text
+        # features here are identical to the ones the model trained on.
+        import joblib
+        vectorizer = joblib.load(_model_file("report_vectorizer.joblib"))
+        inputs.append(vectorizer.transform([str(report_text)]).toarray().astype("float32"))
+
     feed = inputs if len(inputs) > 1 else inputs[0]
     probs = np.mean([m.predict(feed, verbose=0)[0] for m in models], axis=0)
     return {label: float(p) for label, p in zip(LABELS, probs)}

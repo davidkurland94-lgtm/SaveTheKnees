@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 
 import {
   getSeriesInstances,
-  getStudy,
+  getStudyInformation,
   predictStudy,
   seriesInstanceUrl,
   view2dSheet,
@@ -14,7 +14,8 @@ import type {
   PatientIdentity,
   Plane,
   Series,
-  StudyDetail,
+  StoredReportRecord,
+  StudyInformation,
   StudyPredictionResponse,
   ViewerSlice,
   ViewerStack,
@@ -39,10 +40,24 @@ import Dicom2DViewer from "@/components/viewer/Dicom2DViewer";
 import Dicom3DViewer from "@/components/viewer/Dicom3DViewer";
 import FindingList from "@/components/viewer/FindingList";
 
-const MODELS: Array<{ id: ModelName; label: string; hint: string }> = [
-  { id: "fusion", label: "Fusion", hint: "Images and report combined" },
-  { id: "multiplane", label: "Multiplane", hint: "3-seed sagittal + coronal + axial" },
-  { id: "sagittal", label: "Sagittal", hint: "Single-plane 3D CNN" },
+/**
+ * The three trained models, in the order the pipeline produces them.
+ *
+ * Images first, because images are all a study has when it arrives: a folder of
+ * DICOM is stored, split into series and scored by the image models before
+ * anyone has read it. Fusion is last and gated, because its second input is the
+ * report — it cannot run until a doctor has written one, and listing it here
+ * greyed out says that far more plainly than hiding it would.
+ */
+const MODELS: Array<{ id: ModelName; label: string; hint: string; needsReport?: true }> = [
+  { id: "multiplane", label: "Multiplane", hint: "Images only — sagittal + coronal + axial" },
+  { id: "sagittal", label: "Sagittal", hint: "Images only — single-plane 3D CNN" },
+  {
+    id: "fusion",
+    label: "Fusion",
+    hint: "Images and the report, jointly",
+    needsReport: true,
+  },
 ];
 
 /**
@@ -68,7 +83,16 @@ const cachedPrediction = createPromiseCache<StudyPredictionResponse>(60);
  */
 type SeriesFilter = "all" | Plane;
 
-/** `/{StudyInstanceUID}` — the whole page is addressed by the UID in the path. */
+/**
+ * `/{StudyInstanceUID}` — the whole page is addressed by the UID in the path.
+ *
+ * Reads `/view/{uid}/information` rather than `/studies/{uid}`: it is the same
+ * study record plus the two reports, and the reports are what decide which
+ * models this page may offer. A study uploaded a minute ago has neither, so it
+ * opens on the image models with an empty report to write; a corpus study
+ * arrives with the radiologist's already attached, so fusion is live from the
+ * first paint.
+ */
 export function StudyPage() {
   const { studyUid = "" } = useParams<{ studyUid: string }>();
   // The URL still carries the UID; the page itself never shows one. See
@@ -76,7 +100,34 @@ export function StudyPage() {
   const patient = patientOf(studyUid);
   const [series, setSeries] = useState<SeriesFilter | null>(null);
   const [showReport, setShowReport] = useState(true);
-  const study = useAsync((signal) => getStudy(studyUid, signal), [studyUid]);
+  const study = useAsync((signal) => getStudyInformation(studyUid, signal), [studyUid]);
+
+  /**
+   * The doctor's report, once this session has written one.
+   *
+   * Held here rather than in the panel because two different parts of the page
+   * depend on it: the panel that writes it, and the model rail, where saving
+   * the first report is what makes Fusion runnable. Carrying the UID alongside
+   * means a move to another study falls back to that study's own record instead
+   * of showing the last one's.
+   */
+  const [saved, setSaved] = useState<{ uid: string; record: StoredReportRecord } | null>(null);
+  const stored = saved?.uid === studyUid ? saved.record : (study.data?.my_report ?? null);
+  const onSaved = useCallback(
+    (record: StoredReportRecord) => setSaved({ uid: studyUid, record }),
+    [studyUid],
+  );
+
+  /**
+   * Identifies the report the fusion model would read, or null for "there is
+   * none". A stamp rather than a flag, so re-scoring after an edit is a cache
+   * miss instead of a stale answer.
+   */
+  const reportStamp = stored
+    ? `mine:${stored.updated_at}`
+    : study.data?.report
+      ? "dataset"
+      : null;
 
   // Clicking the chip that opened a view closes it again, so every chip is its
   // own way back and the rail needs no separate dismiss.
@@ -103,6 +154,7 @@ export function StudyPage() {
         onSeries={toggleSeries}
         showReport={showReport}
         onToggleReport={() => setShowReport((shown) => !shown)}
+        hasReport={reportStamp !== null}
       />
 
       {/* Reversed, not reordered: on a small screen the rail stacks above the
@@ -122,7 +174,11 @@ export function StudyPage() {
               onClose={() => setSeries(null)}
             />
           ) : (
-            <ModelTab studyUid={studyUid} truth={study.data.golden_labels} />
+            <ModelTab
+              studyUid={studyUid}
+              truth={study.data.golden_labels}
+              reportStamp={reportStamp}
+            />
           )}
         </aside>
 
@@ -135,7 +191,20 @@ export function StudyPage() {
               loading={study.loading}
             />
           </div>
-          {study.data?.has_report && showReport && <ReportPanel studyUid={studyUid} />}
+          {/* Always offered, never conditional on a report existing: on an
+              uploaded study this empty box IS the next step, and a panel that
+              only appears once there is something in it can never be the place
+              the first report gets written. Keyed by study so moving between
+              two of them cannot carry a draft across. */}
+          {study.data && showReport && (
+            <ReportPanel
+              key={studyUid}
+              studyUid={studyUid}
+              dataset={study.data.report}
+              stored={stored}
+              onSaved={onSaved}
+            />
+          )}
         </section>
       </div>
     </div>
@@ -160,13 +229,16 @@ function StudyBanner({
   onSeries,
   showReport,
   onToggleReport,
+  hasReport,
 }: {
   patient: PatientIdentity;
-  study: StudyDetail | null;
+  study: StudyInformation | null;
   series: SeriesFilter | null;
   onSeries: (filter: SeriesFilter) => void;
   showReport: boolean;
   onToggleReport: () => void;
+  /** Whether either report exists — what the chip reports and Fusion needs. */
+  hasReport: boolean;
 }) {
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-card px-5 py-2">
@@ -198,15 +270,16 @@ function StudyBanner({
               {plane} × {count}
             </Chip>
           ))}
-          {study.has_report && (
-            <Chip
-              onClick={onToggleReport}
-              active={showReport}
-              title={showReport ? "Hide the report" : "Show the report"}
-            >
-              has report
-            </Chip>
-          )}
+          {/* Shown either way. "no report yet" is the single most useful thing
+              this banner can say about a study that has just been uploaded, and
+              it is the chip that opens the place to fix it. */}
+          <Chip
+            onClick={onToggleReport}
+            active={showReport}
+            title={showReport ? "Hide the report" : "Show the report"}
+          >
+            {hasReport ? "has report" : "no report yet"}
+          </Chip>
         </div>
       )}
     </div>
@@ -397,16 +470,49 @@ function SeriesViewers({
   );
 }
 
-function ModelTab({ studyUid, truth }: { studyUid: string; truth: GoldenLabels | null }) {
-  const [model, setModel] = useState<ModelName>("fusion");
+/**
+ * The rail's model view: which model, and what it made of this study.
+ *
+ * `reportStamp` is the whole gate. Null means no report exists, so the fusion
+ * model has only one of its two inputs and its tab is dead — and the panel opens
+ * on the images, which are the only thing there is to go on. When a stamp
+ * appears (the doctor saved one, or the study came out of the corpus with the
+ * radiologist's attached) fusion becomes selectable, and a reader who has not
+ * chosen otherwise is moved onto it, because that is the answer this project
+ * exists to give.
+ */
+function ModelTab({
+  studyUid,
+  truth,
+  reportStamp,
+}: {
+  studyUid: string;
+  truth: GoldenLabels | null;
+  reportStamp: string | null;
+}) {
+  const hasReport = reportStamp !== null;
+  // Null until a reader picks, so availability decides for as long as nobody
+  // has: no effect has to chase the report appearing, and an explicit choice is
+  // never overridden by one arriving.
+  const [picked, setPicked] = useState<ModelName | null>(null);
+  const model: ModelName =
+    picked && (picked !== "fusion" || hasReport) ? picked : hasReport ? "fusion" : "multiplane";
+
+  // The report is an input to fusion, so an edited report is a different run.
+  // The image models do not read it and keep their answer across a save.
+  const key = model === "fusion" ? `${studyUid}|fusion|${reportStamp}` : `${studyUid}|${model}`;
   const prediction = useAsync(
     // No abort signal on purpose: a run cancelled halfway leaves nothing to
     // cache, and a switch away and back should be the case this makes instant.
-    () => cachedPrediction(`${studyUid}|${model}`, () => predictStudy(studyUid, model)),
-    [studyUid, model],
+    () => cachedPrediction(key, () => predictStudy(studyUid, model)),
+    [key],
   );
 
   const active = MODELS.find((entry) => entry.id === model) ?? MODELS[0];
+  // An uploaded study missing a plane is scored by whatever the server could
+  // actually run, and it says which in the response. Believing the request
+  // instead would label a single-plane answer "Multiplane".
+  const served = prediction.data && prediction.data.model !== model ? prediction.data.model : null;
 
   return (
     <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
@@ -415,25 +521,50 @@ function ModelTab({ studyUid, truth }: { studyUid: string; truth: GoldenLabels |
           scrolling away from the numbers it changes. */}
       <div className="flex shrink-0 flex-wrap items-center gap-3">
         <div className="flex gap-1 rounded-xl border border-border p-1">
-          {MODELS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              title={entry.hint}
-              onClick={() => setModel(entry.id)}
-              className={cn(
-                "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
-                model === entry.id
-                  ? "bg-secondary text-secondary-foreground"
-                  : "text-muted-foreground hover:text-primary",
-              )}
-            >
-              {entry.label}
-            </button>
-          ))}
+          {MODELS.map((entry) => {
+            const locked = entry.needsReport && !hasReport;
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                disabled={locked}
+                aria-pressed={model === entry.id}
+                title={
+                  locked
+                    ? "Fusion reads the images and the report together. Write a report below to run it."
+                    : entry.hint
+                }
+                onClick={() => setPicked(entry.id)}
+                className={cn(
+                  "flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
+                  locked
+                    ? "cursor-not-allowed text-subtle"
+                    : model === entry.id
+                      ? "bg-secondary text-secondary-foreground"
+                      : "text-muted-foreground hover:text-primary",
+                )}
+              >
+                {locked && <Icon name="lock" size={10} strokeWidth={2.5} />}
+                {entry.label}
+              </button>
+            );
+          })}
         </div>
         <p className="text-xs text-muted-foreground">{active.hint}</p>
       </div>
+
+      {!hasReport && (
+        <p className="shrink-0 rounded-xl border border-dashed border-border px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+          Images only so far. The report model has nothing to read until a report
+          is written, and fusion needs both.
+        </p>
+      )}
+
+      {served && (
+        <p className="shrink-0 text-[11px] text-muted-foreground">
+          Served by the {served} model — the server could not run {model} over this study.
+        </p>
+      )}
 
       <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
         {prediction.loading ? (
