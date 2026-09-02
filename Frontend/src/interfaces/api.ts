@@ -201,6 +201,17 @@ export interface PredictionResponse {
   predictions: LabelScores;
 }
 
+/**
+ * `GET /predict/report/terms` — the medical dictionary the report model counts.
+ *
+ * Data, not code: the list is a file on the server and a deployment without it
+ * answers with an empty array rather than an error.
+ */
+export interface ReportTermsResponse {
+  count: number;
+  terms: string[];
+}
+
 /** `POST /predict/report` — free-text report scored by the report model. */
 export interface ReportPredictionResponse {
   model_status: string;

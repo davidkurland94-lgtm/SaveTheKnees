@@ -21,6 +21,15 @@ MODEL_PATH = paths.REPO_ROOT / "models" / "report_model.keras"
 MEDICAL_TERMS = paths.DATA / "meta" / "medical_terms.txt"
 
 
+def medical_terms(terms_file=MEDICAL_TERMS):
+    """Kevin's dictionary, one term per line, in file order -- which is also
+    feature order, so callers may read it but must not reorder it. Empty list
+    when the file is absent, exactly as term_features treats that case."""
+    if not Path(terms_file).exists():
+        return []
+    return [t for t in Path(terms_file).read_text(encoding="utf-8").splitlines() if t.strip()]
+
+
 def term_features(texts, terms_file=MEDICAL_TERMS):
     """log1p count of each medical term per report -- Kevin's dictionary as
     FEATURES the model weighs, not rules that decide. Measured on gold:
@@ -29,9 +38,9 @@ def term_features(texts, terms_file=MEDICAL_TERMS):
     The term list is DATA (one term per line), editable without touching code;
     when the file is absent the feature block is simply empty."""
     import re
-    if not Path(terms_file).exists():
+    terms = medical_terms(terms_file)
+    if not terms:
         return np.zeros((len(texts), 0), dtype="float32")
-    terms = [t for t in Path(terms_file).read_text(encoding="utf-8").splitlines() if t.strip()]
     patterns = [re.compile(r"(?<!\w)" + re.escape(t) + r"(?!\w)", re.IGNORECASE) for t in terms]
     counts = np.array([[len(p.findall(str(t)))for p in patterns] for t in texts], dtype="float32")
     return np.log1p(counts)

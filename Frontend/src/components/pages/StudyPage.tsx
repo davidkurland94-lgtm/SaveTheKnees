@@ -4,7 +4,6 @@ import { Link, useParams } from "react-router";
 import {
   getSeriesInstances,
   getStudy,
-  getStudyLabels,
   predictStudy,
   seriesInstanceUrl,
   view2dSheet,
@@ -13,6 +12,7 @@ import type {
   GoldenLabels,
   ModelName,
   PatientIdentity,
+  Plane,
   Series,
   StudyDetail,
   StudyPredictionResponse,
@@ -42,7 +42,7 @@ import FindingList from "@/components/viewer/FindingList";
 const MODELS: Array<{ id: ModelName; label: string; hint: string }> = [
   { id: "fusion", label: "Fusion", hint: "Images and report combined" },
   { id: "multiplane", label: "Multiplane", hint: "3-seed sagittal + coronal + axial" },
-  { id: "sagittal", label: "Sagittal", hint: "Single-plane 3D CNN, also behind POST /predict" },
+  { id: "sagittal", label: "Sagittal", hint: "Single-plane 3D CNN" },
 ];
 
 /**
@@ -58,13 +58,15 @@ const MODELS: Array<{ id: ModelName; label: string; hint: string }> = [
  */
 const cachedPrediction = createPromiseCache<StudyPredictionResponse>(60);
 
-type Tab = "model" | "labels" | "series";
-
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "model", label: "Model" },
-  { id: "labels", label: "Report labels" },
-  { id: "series", label: "Series" },
-];
+/**
+ * Which series the rail is showing, or `null` for none.
+ *
+ * The banner already counts the study's series and breaks them down by plane,
+ * so those counts are the control: clicking "Sagittal × 2" is a more direct way
+ * of asking to see those two than a "Series" button that shows all of them and
+ * leaves the reader to find the plane again.
+ */
+type SeriesFilter = "all" | Plane;
 
 /** `/{StudyInstanceUID}` — the whole page is addressed by the UID in the path. */
 export function StudyPage() {
@@ -72,8 +74,14 @@ export function StudyPage() {
   // The URL still carries the UID; the page itself never shows one. See
   // `lib/patients.ts` for why a study wears a name here.
   const patient = patientOf(studyUid);
-  const [tab, setTab] = useState<Tab>("model");
+  const [series, setSeries] = useState<SeriesFilter | null>(null);
+  const [showReport, setShowReport] = useState(true);
   const study = useAsync((signal) => getStudy(studyUid, signal), [studyUid]);
+
+  // Clicking the chip that opened a view closes it again, so every chip is its
+  // own way back and the rail needs no separate dismiss.
+  const toggleSeries = (filter: SeriesFilter) =>
+    setSeries((current) => (current === filter ? null : filter));
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
@@ -88,45 +96,34 @@ export function StudyPage() {
         </Link>
       </NavBar>
 
-      <StudyBanner patient={patient} study={study.data} />
+      <StudyBanner
+        patient={patient}
+        study={study.data}
+        series={series}
+        onSeries={toggleSeries}
+        showReport={showReport}
+        onToggleReport={() => setShowReport((shown) => !shown)}
+      />
 
       {/* Reversed, not reordered: on a small screen the rail stacks above the
           viewers, which is where a panel of findings belongs; `row-reverse`
           paints it down the right-hand side once there is room for a column. */}
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row-reverse">
         {/* The narrow rail, on the right: what the models make of the study. */}
-        <aside className="flex w-full shrink-0 flex-col gap-6 overflow-y-auto border-b border-border px-5 py-6 lg:w-1/5 lg:min-w-80 lg:max-w-sm lg:border-b-0 lg:border-l">
+        <aside className="flex w-full shrink-0 flex-col gap-6 overflow-y-auto border-b border-border px-5 py-6 lg:w-1/5 lg:min-w-80 lg:max-w-sm lg:overflow-hidden lg:border-b-0 lg:border-l">
           {study.loading ? (
             <Loading label="Loading study…" />
           ) : study.error ? (
             <ErrorState message={study.error} onRetry={study.reload} />
-          ) : study.data ? (
-            <>
-              <nav className="flex flex-wrap gap-1 rounded-xl bg-muted p-1">
-                {TABS.map((entry) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    onClick={() => setTab(entry.id)}
-                    className={cn(
-                      "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
-                      tab === entry.id
-                        ? "bg-white text-primary shadow-sm"
-                        : "text-muted-foreground hover:text-primary",
-                    )}
-                  >
-                    {entry.label}
-                  </button>
-                ))}
-              </nav>
-
-              {tab === "model" && <ModelTab studyUid={studyUid} truth={study.data.golden_labels} />}
-              {tab === "labels" && (
-                <LabelsTab studyUid={studyUid} truth={study.data.golden_labels} />
-              )}
-              {tab === "series" && <SeriesList series={study.data.series} />}
-            </>
-          ) : null}
+          ) : !study.data ? null : series ? (
+            <SeriesPanel
+              series={study.data.series}
+              filter={series}
+              onClose={() => setSeries(null)}
+            />
+          ) : (
+            <ModelTab studyUid={studyUid} truth={study.data.golden_labels} />
+          )}
         </aside>
 
         {/* The wide column: both viewers, with the written report beneath them. */}
@@ -138,7 +135,7 @@ export function StudyPage() {
               loading={study.loading}
             />
           </div>
-          {study.data?.has_report && <ReportPanel studyUid={studyUid} />}
+          {study.data?.has_report && showReport && <ReportPanel studyUid={studyUid} />}
         </section>
       </div>
     </div>
@@ -156,7 +153,21 @@ export function StudyPage() {
  * The identity comes from the UID in the URL, so it paints immediately; only
  * the study's own facts wait on the request.
  */
-function StudyBanner({ patient, study }: { patient: PatientIdentity; study: StudyDetail | null }) {
+function StudyBanner({
+  patient,
+  study,
+  series,
+  onSeries,
+  showReport,
+  onToggleReport,
+}: {
+  patient: PatientIdentity;
+  study: StudyDetail | null;
+  series: SeriesFilter | null;
+  onSeries: (filter: SeriesFilter) => void;
+  showReport: boolean;
+  onToggleReport: () => void;
+}) {
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-card px-5 py-2">
       <div className="flex min-w-0 items-center gap-3">
@@ -170,15 +181,68 @@ function StudyBanner({ patient, study }: { patient: PatientIdentity; study: Stud
 
       {study && (
         <div className="flex flex-wrap items-center gap-2 lg:ml-auto">
-          <Chip>{pluralize(study.n_series, "series", "series")}</Chip>
+          <Chip
+            onClick={() => onSeries("all")}
+            active={series === "all"}
+            title="Show every series in this study"
+          >
+            {pluralize(study.n_series, "series", "series")}
+          </Chip>
           {Object.entries(study.planes).map(([plane, count]) => (
-            <Chip key={plane}>
+            <Chip
+              key={plane}
+              onClick={() => onSeries(plane as Plane)}
+              active={series === plane}
+              title={`Show only the ${plane.toLowerCase()} series`}
+            >
               {plane} × {count}
             </Chip>
           ))}
-          {study.has_report && <Chip>has report</Chip>}
+          {study.has_report && (
+            <Chip
+              onClick={onToggleReport}
+              active={showReport}
+              title={showReport ? "Hide the report" : "Show the report"}
+            >
+              has report
+            </Chip>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The rail's series view, opened by a chip in the banner rather than by a tab. */
+function SeriesPanel({
+  series,
+  filter,
+  onClose,
+}: {
+  series: Series[];
+  filter: SeriesFilter;
+  onClose: () => void;
+}) {
+  const shown = filter === "all" ? series : series.filter((entry) => entry.plane === filter);
+
+  return (
+    <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
+      <div className="flex shrink-0 items-center justify-between gap-2">
+        <h2 className="text-base text-foreground">
+          {filter === "all" ? "All series" : `${filter} series`}
+        </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-accent-soft hover:text-primary"
+        >
+          <Icon name="arrow-left" size={11} />
+          Back
+        </button>
+      </div>
+      <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+        <SeriesList series={shown} />
+      </div>
     </div>
   );
 }
@@ -345,8 +409,11 @@ function ModelTab({ studyUid, truth }: { studyUid: string; truth: GoldenLabels |
   const active = MODELS.find((entry) => entry.id === model) ?? MODELS[0];
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
+    <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
+      {/* Fixed height while the findings below it scroll: switching models is
+          the one control on this panel, and scrolling to reach it would be
+          scrolling away from the numbers it changes. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
         <div className="flex gap-1 rounded-xl border border-border p-1">
           {MODELS.map((entry) => (
             <button
@@ -368,50 +435,19 @@ function ModelTab({ studyUid, truth }: { studyUid: string; truth: GoldenLabels |
         <p className="text-xs text-muted-foreground">{active.hint}</p>
       </div>
 
-      {prediction.loading ? (
-        <Loading label={`Running the ${model} model…`} />
-      ) : prediction.error ? (
-        <ErrorState message={prediction.error} onRetry={prediction.reload} />
-      ) : prediction.data ? (
-        <div className="rounded-2xl border border-border p-5">
-          <FindingList
-            findings={toFindings(prediction.data.predictions, { truth, sortByProbability: true })}
-            note={joinParts([
-              `GET /studies/{uid}/predict?model=${model}`,
-              truth ? "green notches mark the hand-labelled positives" : null,
-            ])}
-          />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function LabelsTab({ studyUid, truth }: { studyUid: string; truth: GoldenLabels | null }) {
-  const labels = useAsync((signal) => getStudyLabels(studyUid, signal), [studyUid]);
-
-  if (labels.loading) return <Loading label="Loading report labels…" />;
-  if (labels.error) return <ErrorState message={labels.error} onRetry={labels.reload} />;
-  if (!labels.data) return null;
-
-  const scores = Object.fromEntries(
-    Object.entries(labels.data.labels).map(([name, entry]) => [name, entry.probability]),
-  );
-
-  return (
-    <div className="flex flex-col gap-4">
-      <p className="text-xs text-muted-foreground">
-        Source: <span className="font-mono">{labels.data.source}</span> — labels derived from the
-        written report, with a YES/NO/UNK verdict per finding.
-      </p>
-      <div className="rounded-2xl border border-border p-5">
-        <FindingList
-          findings={toFindings(scores, {
-            truth,
-            verdicts: labels.data.labels,
-            sortByProbability: true,
-          })}
-        />
+      <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+        {prediction.loading ? (
+          <Loading label={`Running the ${model} model…`} />
+        ) : prediction.error ? (
+          <ErrorState message={prediction.error} onRetry={prediction.reload} />
+        ) : prediction.data ? (
+          <div className="rounded-2xl border border-border p-5">
+            <FindingList
+              findings={toFindings(prediction.data.predictions, { truth, sortByProbability: true })}
+              note={truth ? "Green notches mark the hand-labelled positives." : undefined}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   );

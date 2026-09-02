@@ -1,10 +1,27 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
-import { describeError, getStudyReport, predictReport } from "@/api";
+import { describeError, getReportTerms, getStudyReport, predictReport } from "@/api";
 import type { ReportLang } from "@/interfaces";
-import { cn, toFindings, useAsync } from "@/lib";
+import { cn, createPromiseCache, markTerms, pluralize, toFindings, useAsync } from "@/lib";
 import { Button, ErrorState, Loading } from "@/components/ui";
 import FindingList from "@/components/viewer/FindingList";
+
+/**
+ * The dictionary, fetched once for the whole session.
+ *
+ * It is the same list for every study and it does not change while the tab is
+ * open, so one request serves every report the reader opens. A deployment that
+ * predates the route answers 404; that is caught here and cached as "no
+ * dictionary", which costs one failed request rather than one per study.
+ */
+const cachedTerms = createPromiseCache<string[]>(1);
+
+const loadTerms = () =>
+  cachedTerms("dictionary", () =>
+    getReportTerms()
+      .then((response) => response.terms)
+      .catch(() => []),
+  );
 
 const LANGS: Array<{ id: ReportLang; label: string; hint: string }> = [
   { id: "original", label: "As written", hint: "Exactly as the dataset ships it" },
@@ -38,6 +55,15 @@ export function ReportPanel({ studyUid, className }: ReportPanelProps) {
     (signal) => getStudyReport(studyUid, lang, signal),
     [studyUid, lang],
   );
+  const terms = useAsync(loadTerms, []);
+
+  // The dictionary is English, so the "As written" rendering of a report the
+  // dataset ships in another language simply has nothing to mark.
+  const segments = useMemo(
+    () => markTerms(report.data?.report ?? "", terms.data ?? []),
+    [report.data, terms.data],
+  );
+  const marked = segments.filter((segment) => segment.term).length;
 
   const runReportModel = useCallback(async () => {
     const text = report.data?.report;
@@ -108,7 +134,7 @@ export function ReportPanel({ studyUid, className }: ReportPanelProps) {
           disabled={scoring || lang !== "en"}
           title={
             lang === "en"
-              ? "POST /predict/report"
+              ? "Run the report model over this text"
               : "The report model expects English — switch to it first."
           }
           className="px-3 py-1.5 text-xs"
@@ -118,9 +144,31 @@ export function ReportPanel({ studyUid, className }: ReportPanelProps) {
       </header>
 
       <div className="flex min-h-0 flex-col gap-4 p-4 lg:flex-row">
-        <article className="max-h-40 min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-          {report.data.report}
-        </article>
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <article className="max-h-40 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+            {segments.map((segment, index) =>
+              segment.term ? (
+                <mark
+                  key={index}
+                  className="bg-transparent text-foreground underline decoration-accent decoration-2 underline-offset-2"
+                >
+                  {segment.text}
+                </mark>
+              ) : (
+                <span key={index}>{segment.text}</span>
+              ),
+            )}
+          </article>
+          {marked > 0 && (
+            <p className="text-[10px] text-subtle">
+              <span className="underline decoration-accent decoration-2 underline-offset-2">
+                Underlined
+              </span>
+              : {pluralize(marked, "term")} the report model counts as a feature — what it read,
+              not how much each one moved the answer.
+            </p>
+          )}
+        </div>
 
         {scoreError && (
           <div className="lg:w-80 lg:shrink-0">
@@ -134,7 +182,7 @@ export function ReportPanel({ studyUid, className }: ReportPanelProps) {
           <div className="max-h-40 overflow-y-auto rounded-xl border border-border bg-background p-4 lg:w-80 lg:shrink-0">
             <FindingList
               findings={toFindings(scores, { sortByProbability: true })}
-              note="POST /predict/report — the text beside this, scored by the report model, independent of the images."
+              note="The text beside this, scored by the report model — independent of the images."
             />
           </div>
         )}

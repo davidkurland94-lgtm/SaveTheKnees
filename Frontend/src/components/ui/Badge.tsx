@@ -32,10 +32,47 @@ export function Tag({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function Chip({ children }: { children: React.ReactNode }) {
+const CHIP = "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium";
+
+interface ChipProps {
+  children: React.ReactNode;
+  /** Given, the chip becomes a button; omitted, it stays a plain label. */
+  onClick?: () => void;
+  /** Only meaningful on a clickable chip: whether what it opens is open. */
+  active?: boolean;
+  title?: string;
+}
+
+/**
+ * A small rounded fact. Clickable chips are real buttons and carry
+ * `aria-pressed`, so the state a chip shows with colour is also announced.
+ */
+export function Chip({ children, onClick, active = false, title }: ChipProps) {
+  const className = cn(
+    CHIP,
+    active
+      ? "border-accent bg-secondary text-secondary-foreground"
+      : "border-border bg-white text-muted-foreground",
+    onClick && "cursor-pointer transition-colors hover:border-accent-soft hover:text-primary",
+  );
+
+  if (!onClick) {
+    return (
+      <span className={className} title={title}>
+        {children}
+      </span>
+    );
+  }
+
   return (
-    <span className="inline-flex items-center rounded-full border border-border bg-white px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={title}
+      className={className}
+    >
       {children}
-    </span>
+    </button>
   );
 }
