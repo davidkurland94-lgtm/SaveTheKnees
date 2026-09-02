@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 
 import {
@@ -7,7 +7,6 @@ import {
   getStudyInformation,
   predictStudy,
   seriesInstanceUrl,
-  view2dSheet,
 } from "@/api";
 import type {
   GoldenLabels,
@@ -19,12 +18,10 @@ import type {
   StoredReportRecord,
   StudyInformation,
   StudyPredictionResponse,
-  ViewerSlice,
   ViewerStack,
 } from "@/interfaces";
 import type { AsyncState } from "@/lib";
 import {
-  closeSlices,
   cn,
   createPromiseCache,
   joinParts,
@@ -32,7 +29,6 @@ import {
   patientOf,
   paths,
   pluralize,
-  splitContactSheet,
   toFindings,
   useAsync,
   wadouriImageId,
@@ -40,7 +36,6 @@ import {
 import { Avatar, Chip, ErrorState, GoldenBadge, Icon, Loading, NavBar } from "@/components/ui";
 import ReportPanel from "@/components/studies/ReportPanel";
 import SeriesList from "@/components/studies/SeriesList";
-import Dicom2DViewer from "@/components/viewer/Dicom2DViewer";
 import Dicom3DViewer from "@/components/viewer/Dicom3DViewer";
 import DicomMprViewer from "@/components/viewer/DicomMprViewer";
 import FindingList from "@/components/viewer/FindingList";
@@ -192,15 +187,13 @@ export function StudyPage() {
           )}
         </aside>
 
-        {/* The wide column: both viewers, with the written report beneath them. */}
+        {/* The wide column: the viewer, with the written report beneath it. */}
         <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3">
-          <div className="flex min-h-0 flex-1 flex-col gap-3 xl:flex-row">
-            <SeriesViewers
-              studyUid={studyUid}
-              series={study.data?.series ?? []}
-              loading={study.loading}
-            />
-          </div>
+          <SeriesViewers
+            studyUid={studyUid}
+            series={study.data?.series ?? []}
+            loading={study.loading}
+          />
           {/* Always offered, never conditional on a report existing: on an
               uploaded study this empty box IS the next step, and a panel that
               only appears once there is something in it can never be the place
@@ -331,13 +324,6 @@ function SeriesPanel({
 }
 
 /**
- * One column of the sheet per request: `columns: 1` makes the tile size exactly
- * the sheet width and the slice count exactly `height / width`, so nothing has
- * to be assumed about how many slices came back.
- */
-const SHEET_COLUMNS = 1;
-
-/**
  * What the right-hand panel is showing.
  *
  * Two answers to two different questions, which is why they are a switch rather
@@ -400,20 +386,16 @@ function forSeries<T>(
 }
 
 /**
- * Owns what the two viewers draw — they are UI only, so the fetching happens
- * here. Both now show the same thing, the `(24, 224, 224)` tensor the model is
- * fed; they differ only in the form they want it, so there are two requests per
- * series, both for the selected one only.
+ * Owns what the viewer draws — it is UI only, so the fetching happens here.
  *
- * `Dicom2DViewer` gets pixels: `/view/{uid}/2d_image_sequence` returns that
- * tensor as one contact sheet, fetched here and cut back apart.
- *
- * `Dicom3DViewer` gets the tensor itself: `/studies/{uid}/series/{uid}/tensor`
- * is the same array as a float32 `.npy`, which is what a volume needs and a
- * sheet of 8-bit tiles is not.
+ * One request per series, for the selected series and the chosen panel only.
+ * `Dicom3DViewer` reads the model's own input from
+ * `/studies/{uid}/series/{uid}/tensor`, a float32 `.npy`; `DicomMprViewer`
+ * reads the study's DICOM file names from `.../instances` and lets Cornerstone
+ * stream the pixels. Neither is fetched for a panel that is not on screen.
  *
  * The server rebuilds both from raw DICOM on every request and that is slow, so
- * each is kept once seen and flipping between tabs is instant.
+ * each is kept once seen and flipping back to a series is instant.
  */
 function SeriesViewers({
   studyUid,
@@ -433,30 +415,10 @@ function SeriesViewers({
     available.find((entry) => entry.series_uid === selectedId) ?? available[0] ?? null;
   const activeId = active?.series_uid ?? null;
 
-  const cache = useRef(new Map<string, ViewerSlice[]>());
-
-  const sheets = useAsync(
-    async (signal) => {
-      if (!activeId) return null;
-      const cached = cache.current.get(activeId);
-      if (cached) return { seriesUid: activeId, value: cached };
-
-      const sheet = await view2dSheet(
-        studyUid,
-        { seriesUid: activeId, columns: SHEET_COLUMNS },
-        signal,
-      );
-      const cut = await splitContactSheet(sheet, SHEET_COLUMNS);
-      cache.current.set(activeId, cut);
-      return { seriesUid: activeId, value: cut };
-    },
-    [studyUid, activeId],
-  );
-
-  // About 4.6 MB of float32 per series, cached for the same reason the sheets
-  // are: the server rebuilds the tensor from raw DICOM on every request, and
-  // the volume the 3D viewer holds on the GPU is keyed by series too, so a
-  // re-fetch would be paid for and then thrown away.
+  // About 4.6 MB of float32 per series, held for the tab switch: the server
+  // rebuilds the tensor from raw DICOM on every request, and the volume the 3D
+  // viewer keeps on the GPU is keyed by series too, so re-fetching one already
+  // uploaded would be paid for and then thrown away.
   const volumes = useRef(new Map<string, ModelVolume>());
 
   const tensors = useAsync(
@@ -488,20 +450,8 @@ function SeriesViewers({
     [studyUid, activeId, panel],
   );
 
-  const slices = forSeries(sheets, activeId) ?? [];
   const volume = forSeries(tensors, activeId) ?? undefined;
   const imageIds = forSeries(instances, activeId) ?? [];
-
-  // ImageBitmaps hold native memory the GC is in no hurry to reclaim, and a
-  // five-series study caches 120 of them. The tensors are plain typed arrays,
-  // so they go when the map does.
-  useEffect(() => {
-    const held = cache.current;
-    return () => {
-      for (const entry of held.values()) closeSlices(entry);
-      held.clear();
-    };
-  }, []);
 
   const labels = planeLabels(available);
   const stacks: ViewerStack[] = available.map((entry, position) => ({
@@ -511,7 +461,6 @@ function SeriesViewers({
     description: describeSeries(entry),
     // Only the selected series carries data; the rest are tabs waiting to be
     // clicked, which is what keeps the page to one request at a time per view.
-    slices: entry.series_uid === activeId ? slices : [],
     volume: entry.series_uid === activeId ? volume : undefined,
     imageIds: entry.series_uid === activeId ? imageIds : [],
   }));
@@ -540,43 +489,24 @@ function SeriesViewers({
     onSelect: (id: string) => setPanel(id as PanelView),
   };
 
-  return (
-    <>
-      <Dicom2DViewer
-        {...shared}
-        className="min-h-0 min-w-0 flex-1"
-        emptyLabel={emptyReason(
-          sheets.loading,
-          sheets.error,
-          "Building the contact sheet on the server…",
-        )}
-      />
-      {/* The reference view carries three panes where the volume carries one,
-          so it takes two thirds of the row rather than half. */}
-      {panel === "reference" ? (
-        <DicomMprViewer
-          {...shared}
-          views={views}
-          className="min-h-0 min-w-0 flex-[2]"
-          emptyLabel={emptyReason(
-            instances.loading,
-            instances.error,
-            "Listing the study's DICOM slices…",
-          )}
-        />
-      ) : (
-        <Dicom3DViewer
-          {...shared}
-          views={views}
-          className="min-h-0 min-w-0 flex-1"
-          emptyLabel={emptyReason(
-            tensors.loading,
-            tensors.error,
-            "Downloading the model's tensor…",
-          )}
-        />
+  return panel === "reference" ? (
+    <DicomMprViewer
+      {...shared}
+      views={views}
+      className="min-h-0 min-w-0 flex-1"
+      emptyLabel={emptyReason(
+        instances.loading,
+        instances.error,
+        "Listing the study's DICOM slices…",
       )}
-    </>
+    />
+  ) : (
+    <Dicom3DViewer
+      {...shared}
+      views={views}
+      className="min-h-0 min-w-0 flex-1"
+      emptyLabel={emptyReason(tensors.loading, tensors.error, "Downloading the model's tensor…")}
+    />
   );
 }
 

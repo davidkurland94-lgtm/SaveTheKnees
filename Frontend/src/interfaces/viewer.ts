@@ -1,28 +1,12 @@
 /**
  * Types the DICOM viewers consume.
  *
- * The viewers are pure UI: whoever renders them (a page) fetches by study UID,
- * decodes, and hands the pixels down. Nothing in `components/viewer` talks to
- * the API, so the same components serve a stored study, an upload, or a fixture.
+ * The viewers are pure UI: whoever renders them (a page) fetches by study UID
+ * and hands the pixels down. Nothing in `components/viewer` talks to the API,
+ * so the same components serve a stored study, an upload, or a fixture.
  */
 
 import type { Plane } from "./api";
-
-/**
- * Anything a viewer can paint. `ImageData` is what `lib/dicom.ts` produces for
- * an uploaded series; the image/bitmap/canvas variants let a page feed slices
- * carved out of a server-rendered contact sheet instead.
- */
-export type SliceImage = ImageData | ImageBitmap | HTMLImageElement | HTMLCanvasElement;
-
-/** One slice of a stack, already decoded. */
-export interface ViewerSlice {
-  image: SliceImage;
-  /** Stable React key; falls back to the position in the stack. */
-  id?: string;
-  /** Overlay caption, e.g. "Slice 12". */
-  label?: string;
-}
 
 /**
  * One acquisition run — the unit both viewers show at a time. A study usually
@@ -32,7 +16,6 @@ export interface ViewerSlice {
 export interface ViewerStack {
   /** Unique within the array; the series UID is the natural choice. */
   id: string;
-  slices: ViewerSlice[];
   /** Acquisition plane, when the page knows it. Badges the stage. */
   plane?: Plane;
   /**
@@ -52,12 +35,10 @@ export interface ViewerStack {
   /**
    * The model's own input tensor — what `Dicom3DViewer` builds its volume from.
    *
-   * The same pixels `slices` holds, in the form a volume needs them. `slices`
-   * is the contact sheet cut back apart, which is right for leafing through one
-   * plane at a time; this is the whole `(24, 224, 224)` block, which is what
-   * Cornerstone can actually render as a volume. Both come out of
-   * `sequence_to_tensor` on the server, so the two viewers cannot disagree
-   * about what the model was shown.
+   * The whole `(24, 224, 224)` block rather than a slice at a time, because a
+   * volume is what the viewer renders. It comes out of `sequence_to_tensor` on
+   * the server, which is the same function that feeds the network, so what is
+   * on screen is what was scored.
    */
   volume?: ModelVolume;
   /**

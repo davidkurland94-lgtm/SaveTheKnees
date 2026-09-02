@@ -1,6 +1,4 @@
-/** The bits of viewer furniture both `Dicom2DViewer` and `Dicom3DViewer` use. */
-
-import { useId } from "react";
+/** The bits of viewer furniture `Dicom3DViewer` and `DicomMprViewer` share. */
 
 import type { ViewerStack } from "@/interfaces";
 import { cn } from "@/lib";
@@ -109,60 +107,6 @@ export interface ViewSwitch {
 /** Separates the page's view switch from a viewer's own controls. */
 export function ChromeDivider() {
   return <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-white/10" />;
-}
-
-interface ViewerSliderProps {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step?: number;
-  icon?: IconName;
-  /** Right-hand read-out; defaults to the raw value. */
-  format?: (value: number) => string;
-  onChange: (value: number) => void;
-  disabled?: boolean;
-  className?: string;
-}
-
-/** A labelled range input in the viewer's dark palette. */
-export function ViewerSlider({
-  label,
-  value,
-  min,
-  max,
-  step = 1,
-  icon,
-  format,
-  onChange,
-  disabled = false,
-  className,
-}: ViewerSliderProps) {
-  const id = useId();
-  return (
-    <div
-      className={cn("flex min-w-0 flex-1 items-center gap-2", disabled && "opacity-40", className)}
-    >
-      {icon && <Icon name={icon} size={13} className="shrink-0 text-accent" />}
-      <label htmlFor={id} className="shrink-0 text-[11px] text-white/40">
-        {label}
-      </label>
-      <input
-        id={id}
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="h-1 min-w-0 flex-1 accent-accent"
-      />
-      <span className="w-10 shrink-0 text-right font-mono text-[11px] text-white/30">
-        {format ? format(value) : value}
-      </span>
-    </div>
-  );
 }
 
 interface ViewerButtonProps {

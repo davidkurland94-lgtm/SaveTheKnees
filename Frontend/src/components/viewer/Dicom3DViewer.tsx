@@ -112,13 +112,41 @@ function registerPresets(): void {
   }
 }
 
-const { MouseBindings } = ToolEnums;
+const { KeyboardBindings, MouseBindings } = ToolEnums;
 
-/** Which tool each mouse button drives. */
+/**
+ * How the volume is flown around.
+ *
+ * Every one of the three has a route that needs nothing but a left button and a
+ * two-finger scroll, because that is all a trackpad has. The middle- and
+ * right-button bindings are kept beside them for anyone on a real mouse, and
+ * cost nothing: Cornerstone matches a binding on button *and* modifier, so
+ * plain-drag and shift-drag resolve to different tools without ambiguity.
+ */
 const BINDINGS = [
-  { tool: TrackballRotateTool.toolName, binding: MouseBindings.Primary },
-  { tool: PanTool.toolName, binding: MouseBindings.Auxiliary },
-  { tool: ZoomTool.toolName, binding: MouseBindings.Secondary },
+  { tool: TrackballRotateTool.toolName, bindings: [{ mouseButton: MouseBindings.Primary }] },
+  {
+    tool: PanTool.toolName,
+    bindings: [
+      { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift },
+      { mouseButton: MouseBindings.Auxiliary },
+    ],
+  },
+  {
+    tool: ZoomTool.toolName,
+    bindings: [
+      // The one that was missing. The footer had promised wheel-zoom since this
+      // viewer was written, but nothing was ever bound to `Wheel`, so scrolling
+      // over the volume did nothing at all.
+      { mouseButton: MouseBindings.Wheel },
+      // Alt rather than Ctrl: macOS delivers ctrl+left-click as a *secondary*
+      // click carrying ctrlKey, so a Primary+Ctrl binding would never match
+      // there — and neither would the plain Secondary one below it, whose
+      // modifier is undefined. Alt is remapped by no platform.
+      { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Alt },
+      { mouseButton: MouseBindings.Secondary },
+    ],
+  },
 ];
 
 /**
@@ -136,9 +164,9 @@ function registerTools(): void {
 
 interface Dicom3DViewerProps {
   /**
-   * The same stacks `Dicom2DViewer` takes — pass both the same array (and the
+   * The same stacks `DicomMprViewer` takes — pass both the same array (and the
    * same `stackId`) to keep the two views on one series. This viewer reads
-   * `volume`, not `slices`.
+   * `volume`, the reference view reads `imageIds`.
    */
   stacks: ViewerStack[];
   /** Controlled active stack; omit and the viewer owns the selection. */
@@ -274,11 +302,9 @@ export function Dicom3DViewer({
         ]);
 
         const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
-        for (const { tool, binding } of BINDINGS) {
+        for (const { tool, bindings } of BINDINGS) {
           toolGroup?.addTool(tool);
-          toolGroup?.setToolActive(tool, {
-            bindings: [{ mouseButton: binding }],
-          });
+          toolGroup?.setToolActive(tool, { bindings });
         }
         toolGroup?.addViewport(viewportId, engineId);
 
@@ -399,7 +425,7 @@ export function Dicom3DViewer({
 
       <div className="flex items-center gap-4 border-t border-white/5 bg-viewer-panel px-3 py-2">
         <span className="min-w-0 flex-1 truncate text-[11px] text-white/25">
-          model input · drag to rotate · wheel to zoom · middle-drag to pan
+          model input · drag to rotate · scroll to zoom · shift-drag to pan
         </span>
         <ViewerButton
           icon="reset"

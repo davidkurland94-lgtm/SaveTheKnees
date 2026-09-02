@@ -106,13 +106,35 @@ const TOOLS: ReadonlyArray<SegmentedOption<string>> = [
   },
 ];
 
-const { MouseBindings } = ToolEnums;
+const { KeyboardBindings, MouseBindings } = ToolEnums;
 
-/** Bound once and never changed, so the palette only has to own the left button. */
+/**
+ * Bound once and never changed, so the palette only has to own the plain left
+ * button.
+ *
+ * Pan and zoom carry a shift/ctrl route as well as a middle/right one, for the
+ * same reason they do in `Dicom3DViewer`: a trackpad has neither of the latter.
+ * The wheel stays on slice scrolling here rather than zoom — in a reformat the
+ * thing you most want the scroll for is moving through the stack.
+ */
 const FIXED_BINDINGS = [
-  { tool: PanTool.toolName, binding: MouseBindings.Auxiliary },
-  { tool: ZoomTool.toolName, binding: MouseBindings.Secondary },
-  { tool: StackScrollTool.toolName, binding: MouseBindings.Wheel },
+  {
+    tool: PanTool.toolName,
+    bindings: [
+      { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift },
+      { mouseButton: MouseBindings.Auxiliary },
+    ],
+  },
+  {
+    tool: ZoomTool.toolName,
+    bindings: [
+      // Alt, not Ctrl — see the note in `Dicom3DViewer`: macOS turns ctrl+click
+      // into a secondary click and a Primary+Ctrl binding can never fire.
+      { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Alt },
+      { mouseButton: MouseBindings.Secondary },
+    ],
+  },
+  { tool: StackScrollTool.toolName, bindings: [{ mouseButton: MouseBindings.Wheel }] },
 ];
 
 /**
@@ -287,11 +309,9 @@ export function DicomMprViewer({
         for (const entry of TOOLS) {
           if (entry.id !== CrosshairsTool.toolName) toolGroup.addTool(entry.id);
         }
-        for (const { tool: name, binding } of FIXED_BINDINGS) {
+        for (const { tool: name, bindings } of FIXED_BINDINGS) {
           toolGroup.addTool(name);
-          toolGroup.setToolActive(name, {
-            bindings: [{ mouseButton: binding }],
-          });
+          toolGroup.setToolActive(name, { bindings });
         }
         for (const viewportId of viewportIds) toolGroup.addViewport(viewportId, engineId);
 
@@ -434,7 +454,7 @@ export function DicomMprViewer({
 
       <div className="flex items-center gap-4 border-t border-white/5 bg-viewer-panel px-3 py-2">
         <span className="min-w-0 flex-1 truncate text-[11px] text-white/25">
-          study geometry · wheel to scroll · middle-drag to pan · right-drag to zoom
+          study geometry · scroll for slices · shift-drag to pan · alt-drag to zoom
         </span>
         <ViewerButton
           label="Clear marks"
