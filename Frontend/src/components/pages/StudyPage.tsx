@@ -14,15 +14,15 @@ import {
   closeSlices,
   cn,
   joinParts,
+  patientOf,
   paths,
   pluralize,
-  shortUid,
   splitContactSheet,
   toFindings,
   useAsync,
   wadouriImageId,
 } from "@/lib";
-import { Chip, ErrorState, GoldenBadge, Icon, Loading, NavBar } from "@/components/ui";
+import { Avatar, Chip, ErrorState, GoldenBadge, Icon, Loading, NavBar } from "@/components/ui";
 import ReportPanel from "@/components/studies/ReportPanel";
 import SeriesList from "@/components/studies/SeriesList";
 import Dicom2DViewer from "@/components/viewer/Dicom2DViewer";
@@ -47,6 +47,9 @@ const TABS: Array<{ id: Tab; label: string }> = [
 /** `/{StudyInstanceUID}` — the whole page is addressed by the UID in the path. */
 export function StudyPage() {
   const { studyUid = "" } = useParams<{ studyUid: string }>();
+  // The URL still carries the UID; the page itself never shows one. See
+  // `lib/patients.ts` for why a study wears a name here.
+  const patient = patientOf(studyUid);
   const [tab, setTab] = useState<Tab>("model");
   const study = useAsync((signal) => getStudy(studyUid, signal), [studyUid]);
 
@@ -73,8 +76,16 @@ export function StudyPage() {
           ) : study.data ? (
             <>
               <header className="flex flex-col gap-2">
-                <h1 className="text-xl text-foreground">Study {shortUid(studyUid, 12)}</h1>
-                <p className="break-all font-mono text-[10px] text-muted-foreground">{studyUid}</p>
+                <div className="flex items-center gap-3">
+                  <Avatar patient={patient} size="md" />
+                  <div className="min-w-0">
+                    <h1 className="truncate text-xl text-foreground">{patient.name}</h1>
+                    <p className="text-[11px] tabular-nums text-muted-foreground">
+                      {patient.age}
+                      {patient.sex} · MRN {patient.mrn}
+                    </p>
+                  </div>
+                </div>
                 <div className="mt-1 flex flex-wrap gap-2">
                   <Chip>{pluralize(study.data.n_series, "series", "series")}</Chip>
                   {Object.entries(study.data.planes).map(([plane, count]) => (

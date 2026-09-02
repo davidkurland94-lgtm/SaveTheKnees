@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { seriesPreviewUrl } from "@/api";
 import type { Series } from "@/interfaces";
-import { cn, joinParts } from "@/lib";
+import { cn, joinParts, seriesCode } from "@/lib";
 import { Chip } from "@/components/ui";
 
 interface SeriesListProps {
@@ -69,8 +69,10 @@ function SeriesCard({ series }: { series: Series }) {
           <Chip>{series.n_slices} slices</Chip>
         </div>
         <p className="text-[11px] text-muted-foreground">{tags}</p>
-        <p className="truncate font-mono text-[10px] text-subtle" title={series.series_uid}>
-          {series.series_uid}
+        {/* A short derived handle rather than the series UID: a study can hold
+            two sagittal runs, and something has to tell them apart. */}
+        <p className="font-mono text-[10px] uppercase tracking-wide text-subtle">
+          Sequence {seriesCode(series.series_uid)}
         </p>
       </figcaption>
     </figure>
