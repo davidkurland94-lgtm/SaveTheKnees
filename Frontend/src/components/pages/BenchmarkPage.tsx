@@ -1,8 +1,9 @@
 import { useState } from "react";
+import { Link } from "react-router";
 
 import { getReportTable, getReportVerdicts } from "@/api";
 import type { ReportTableRow } from "@/interfaces";
-import { cn, shortUid, useAsync } from "@/lib";
+import { cn, paths, shortUid, useAsync } from "@/lib";
 import { ErrorState, Icon, Loading, NavBar } from "@/components/ui";
 
 type Tab = "table" | "verdicts";
@@ -21,25 +22,19 @@ const READERS: Array<{ key: keyof ReportTableRow; label: string }> = [
   { key: "fusion_model", label: "Fusion" },
 ];
 
-interface BenchmarkPageProps {
-  onBack: () => void;
-  onOpenStudy: (studyUid: string) => void;
-}
-
-export function BenchmarkPage({ onBack, onOpenStudy }: BenchmarkPageProps) {
+export function BenchmarkPage() {
   const [tab, setTab] = useState<Tab>("table");
 
   return (
     <div className="flex min-h-full flex-col bg-background">
-      <NavBar onHome={onBack}>
-        <button
-          type="button"
-          onClick={onBack}
+      <NavBar homeTo={paths.home}>
+        <Link
+          to={paths.home}
           className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-accent-soft hover:text-primary"
         >
           <Icon name="arrow-left" size={13} />
           Back to studies
-        </button>
+        </Link>
       </NavBar>
 
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-6 py-8">
@@ -73,7 +68,7 @@ export function BenchmarkPage({ onBack, onOpenStudy }: BenchmarkPageProps) {
           ))}
         </nav>
 
-        {tab === "table" ? <AucTable /> : <VerdictsTable onOpenStudy={onOpenStudy} />}
+        {tab === "table" ? <AucTable /> : <VerdictsTable />}
       </div>
     </div>
   );
@@ -147,7 +142,7 @@ function AucTable() {
   );
 }
 
-function VerdictsTable({ onOpenStudy }: { onOpenStudy: (studyUid: string) => void }) {
+function VerdictsTable() {
   const [top, setTop] = useState(20);
   const verdicts = useAsync((signal) => getReportVerdicts(top, signal), [top]);
 
@@ -201,14 +196,13 @@ function VerdictsTable({ onOpenStudy }: { onOpenStudy: (studyUid: string) => voi
                 )}
               >
                 <td className="px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={() => onOpenStudy(row.StudyInstanceUID)}
+                  <Link
+                    to={paths.study(row.StudyInstanceUID)}
                     title={row.StudyInstanceUID}
                     className="font-mono text-xs text-primary hover:underline"
                   >
                     {shortUid(row.StudyInstanceUID, 14)}
-                  </button>
+                  </Link>
                 </td>
                 <td className="max-w-56 px-4 py-3 text-xs text-foreground">{row.report_says}</td>
                 <td className="max-w-56 px-4 py-3 text-xs text-muted-foreground">

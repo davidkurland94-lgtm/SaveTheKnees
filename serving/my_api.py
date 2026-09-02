@@ -23,10 +23,10 @@ from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from functions import catalog
+from functions import catalog, uploads
 from functions.catalog import DataUnavailable
 from functions.labels import LABELS
-from functions.sequence_to_tensor import AXIS_PLANE, sequence_to_tensor
+from functions.sequence_to_tensor import AXIS_PLANE, sequence_to_tensor, sorted_slice_paths
 
 OPENAPI_TAGS = [
     {"name": "health", "description": "Liveness and dataset visibility."},
@@ -121,7 +121,18 @@ def optional(fn, *args, **kwargs):
 
 
 def require_study(study_uid: str):
-    """404 unless the study exists. Most routes start with this."""
+    """404 unless the study exists, in the corpus OR in the upload store.
+
+    Uploads are checked first and without `guard`: an uploaded study must stay
+    reachable on a machine where the 17 GB dataset is not mounted, which is
+    exactly the case a bare catalog lookup turns into a 503.
+    """
+    uploaded = uploads.get(study_uid)
+    if uploaded is not None:
+        # The record is written at upload time, when there is by definition no
+        # report; the doctor's arrives later through /create. Read it fresh
+        # rather than leaving the flag stuck on False and the report tab greyed.
+        return {**uploaded, "has_report": bool(load_reports().get(study_uid))}
     study = guard(catalog.get_study, study_uid)
     if study is None:
         raise HTTPException(404, f"Unknown study: {study_uid}")
@@ -237,14 +248,38 @@ def list_studies(limit: int = Query(100, ge=1, le=1000),
     golden=True marks the 58 hand-labelled studies; drill into one with
     /studies/{study_uid}.
     """
-    df = guard(catalog.studies)
-    page = df.iloc[offset:offset + limit]
-    golden = page[LABELS].notna().all(axis=1)
-    return {"total": int(len(df)), "offset": offset, "limit": limit,
-            "studies": [{"study_uid": uid,
-                         "golden": bool(golden.loc[uid]),
-                         "has_report": bool(isinstance(row.Report, str) and row.Report.strip())}
-                        for uid, row in page.iterrows()]}
+    # Uploaded studies come first and are paginated together with the corpus:
+    # someone who has just uploaded one expects to find it, and hunting for it
+    # on page 221 is not finding it.
+    mine = [{"study_uid": r["study_uid"], "golden": False,
+             "has_report": bool(load_reports().get(r["study_uid"])), "source": "upload"}
+            for r in uploads.list_all()]
+
+    # A missing corpus is not an error when there are uploads to show: the
+    # dataset is a 17 GB mount that a laptop legitimately does not have, and an
+    # uploaded study lives entirely in the write store.
+    try:
+        df = catalog.studies()
+    except DataUnavailable:
+        if not mine:
+            raise
+        df = None
+
+    total = len(mine) + (0 if df is None else int(len(df)))
+
+    rows = mine[offset:offset + limit]
+    # Once the uploads are exhausted the corpus continues where they left off.
+    corpus_offset = max(offset - len(mine), 0)
+    if df is not None and len(rows) < limit:
+        page = df.iloc[corpus_offset:corpus_offset + (limit - len(rows))]
+        golden = page[LABELS].notna().all(axis=1)
+        rows += [{"study_uid": uid,
+                  "golden": bool(golden.loc[uid]),
+                  "has_report": bool(isinstance(row.Report, str) and row.Report.strip()),
+                  "source": "dataset"}
+                 for uid, row in page.iterrows()]
+
+    return {"total": total, "offset": offset, "limit": limit, "studies": rows}
 
 
 @app.get("/studies/golden", tags=["studies"])
@@ -312,6 +347,15 @@ def predict_with_model(study_uid: str,
     """
     from functions.predict import predict_study_with
     try:
+        # An uploaded study has no cached tensor -- the cache was built once,
+        # offline, for the corpus -- so it is scored straight off its DICOM.
+        record = uploads.get(study_uid)
+        if record is not None:
+            predictions, used = predict_uploaded(record, model)
+            if predictions is None:
+                raise HTTPException(422, f"Could not build tensors for {study_uid}")
+            return {"study_uid": study_uid, "model": used, "predictions": predictions}
+
         result = predict_study_with(study_uid, model)
     except FileNotFoundError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -327,8 +371,13 @@ def list_series(study_uid: str,
     """Every sequence of a study."""
     if plane is not None and plane not in AXIS_PLANE.values():
         raise HTTPException(400, f"plane must be one of {sorted(AXIS_PLANE.values())}")
-    require_study(study_uid)
-    rows = guard(catalog.list_series, study_uid, plane)
+    study = require_study(study_uid)
+    # An uploaded study carries its series in its own record; the catalog has
+    # never heard of it.
+    if study.get("source") == "upload":
+        rows = [s for s in study["series"] if plane is None or s["plane"] == plane]
+    else:
+        rows = guard(catalog.list_series, study_uid, plane)
     return {"study_uid": study_uid, "count": len(rows), "series": rows}
 
 
@@ -392,6 +441,57 @@ def get_preview(study_uid: str, series_uid: str,
     return Response(content=buffer.getvalue(), media_type="image/png")
 
 
+@app.get("/studies/{study_uid}/series/{series_uid}/instances", tags=["studies"])
+def list_instances(study_uid: str, series_uid: str):
+    """File names of the raw DICOM slices, in acquisition order.
+
+    The order is the one sorted_slice_paths computes -- ImagePositionPatient
+    projected onto the scan axis -- so it is the same order the model is fed.
+    That matters more here than anywhere else: a browser-side viewer reads
+    geometry from only the first, middle and last instance and trusts the rest
+    of the order as given, so this route is what decides whether a volume comes
+    out the right way round.
+    """
+    directory = series_path(study_uid, series_uid)
+    if directory is None:
+        raise HTTPException(404, f"No DICOM files for series {series_uid}")
+
+    names = [path.name for path in sorted_slice_paths(directory)]
+    return {"study_uid": study_uid, "series_uid": series_uid,
+            "count": len(names), "instances": names}
+
+
+@app.get("/studies/{study_uid}/series/{series_uid}/instances/{instance}",
+         tags=["studies"], responses={200: {"content": {"application/dicom": {}}}})
+def get_instance(study_uid: str, series_uid: str, instance: str):
+    """One slice as the raw DICOM file, straight off disk.
+
+    Everything else under /studies serves cooked pixels -- the (24, 224, 224, 1)
+    tensor, the contact sheet PNG -- which is right for the model and wrong for
+    a viewer: it has been sampled to 24 slices, resized to 224 and window/levelled
+    already, and it carries no geometry. This serves the bytes themselves, so a
+    client-side DICOM reader gets full resolution, real millimetres and its own
+    windowing.
+    """
+    directory = series_path(study_uid, series_uid)
+    if directory is None:
+        raise HTTPException(404, f"No DICOM files for series {series_uid}")
+
+    # A name arriving from the network must not walk out of the series folder;
+    # .name drops any directory part before the path is ever joined.
+    path = (directory / Path(instance).name).resolve()
+    if not path.is_relative_to(directory.resolve()) or not path.is_file():
+        raise HTTPException(404, f"No such instance: {instance}")
+
+    return Response(
+        path.read_bytes(),
+        media_type="application/dicom",
+        # A stored slice never changes, and a viewer asks for every one of them
+        # on each visit, so let the browser keep them.
+        headers={"Cache-Control": "public, max-age=86400, immutable"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Upload
 # ---------------------------------------------------------------------------
@@ -435,6 +535,117 @@ async def upload_new_sequence(
     }
 
 
+def predict_uploaded(record, model="multiplane"):
+    """(predictions, model actually used) for an uploaded study.
+
+    Two substitutions happen here, and the caller is told about both through the
+    returned name rather than being left to assume:
+
+    - fusion is impossible on an upload. It takes the report as an input and a
+      freshly uploaded study has no report by design -- writing it is the whole
+      point of the doctor's next step.
+    - multiplane needs all three planes. A folder holding only a sagittal run
+      falls back to the single-plane model instead of failing.
+    """
+    from functions.predict import predict_from_dirs
+
+    # One series per axis, fluid-sensitive first: most of the twelve findings
+    # are fluid, and several are invisible on a structural sequence. Same rule
+    # sequence_to_tensor.ranked_series applies to the corpus.
+    directories = {}
+    for entry in sorted(record["series"], key=lambda s: not s.get("fluid_sensitive")):
+        axis = entry.get("axis")
+        if axis and axis not in directories:
+            found = series_path(record["study_uid"], entry["series_uid"])
+            if found is not None:
+                directories[axis] = found
+
+    wanted = "multiplane" if model == "fusion" else model
+    for name in dict.fromkeys([wanted, "sagittal"]):
+        try:
+            result = predict_from_dirs(directories, name)
+        except FileNotFoundError:
+            continue                     # that checkpoint is not on this box
+        if result is not None:
+            return result, name
+    return None, None
+
+
+@app.post("/upload/study", tags=["upload"])
+async def upload_study(
+    files: list[UploadFile] = File(..., description="Every .dcm of one study."),
+    model: str = Query("multiplane", pattern="^(sagittal|multiplane)$",
+                       description="Which model pre-fills the labels."),
+):
+    """Store a new study from a folder of DICOM, and pre-fill its labels.
+
+    What comes back is a real study: it appears in GET /studies, opens in the
+    viewer, and can be scored again later. What it deliberately does NOT get:
+
+    - a report. That is the doctor's, written from these images through
+      POST /create/{study_uid}/sequence_report.
+    - golden labels. The 58 hand-labelled studies are the only ground truth in
+      this project and nothing uploaded joins them. The twelve numbers here come
+      from a model and are filed under `predicted_labels`, with the name of the
+      model beside them.
+
+    The UIDs are generated the way the corpus's own were -- pydicom's
+    generate_uid() -- so an uploaded study is indistinguishable in form from a
+    dataset one and cannot collide with it. Series are split out by the
+    SeriesInstanceUID in the headers, so one dropped folder becomes the sagittal,
+    coronal and axial runs it actually contains.
+    """
+    if not files:
+        raise HTTPException(400, "No files uploaded.")
+
+    study_uid = uploads.new_study_uid()
+    destination = uploads.study_dir(study_uid)
+
+    with tempfile.TemporaryDirectory() as staging:
+        staged = []
+        for upload in files:
+            # Only the extension is taken from the client; the stored name is
+            # ours. A name off the network never reaches the filesystem.
+            name = Path(upload.filename or "").name
+            if not name.lower().endswith(".dcm"):
+                continue
+            path = Path(staging) / f"{len(staged):05d}.dcm"
+            with open(path, "wb") as handle:
+                shutil.copyfileobj(upload.file, handle)
+            staged.append(path)
+
+        if not staged:
+            raise HTTPException(400, "No .dcm files in the upload.")
+
+        groups = uploads.group_by_series(staged)
+        if not groups:
+            raise HTTPException(422, "None of the uploaded files could be read as DICOM.")
+
+        records = []
+        for paths in groups.values():
+            series_uid = uploads.new_series_uid()
+            folder = destination / series_uid
+            folder.mkdir(parents=True, exist_ok=True)
+            for position, source in enumerate(paths):
+                shutil.copyfile(source, folder / f"{position:05d}.dcm")
+
+            import pydicom
+            head = pydicom.dcmread(str(paths[0]), stop_before_pixels=True)
+            records.append(uploads.series_record(study_uid, series_uid, head, len(paths)))
+
+    record = uploads.build_record(study_uid, records)
+    # Written before scoring, so a model that is missing or slow leaves a study
+    # that is complete and browsable rather than a half-created one.
+    uploads.write_record(study_uid, record)
+
+    predictions, used = predict_uploaded(record, model)
+    record = uploads.build_record(study_uid, records, labels=predictions, label_model=used)
+    uploads.write_record(study_uid, record)
+
+    return {**record, "n_files": sum(len(p) for p in groups.values()),
+            "skipped": len(files) - sum(len(p) for p in groups.values())}
+
+
 # ---------------------------------------------------------------------------
 # Views
 # ---------------------------------------------------------------------------
@@ -442,7 +653,10 @@ async def upload_new_sequence(
 def resolve_series(study_uid: str, series_uid: str | None, plane: str | None):
     """Pick which series to render: the one asked for, or the first of a plane,
     or just the study's first available one."""
-    candidates = guard(catalog.list_series, study_uid, plane)
+    record = uploads.get(study_uid)
+    candidates = (record["series"] if plane is None
+                  else [s for s in record["series"] if s["plane"] == plane]) \
+        if record is not None else guard(catalog.list_series, study_uid, plane)
     # catalog computes "available" against train_series/, so recompute it
     # against the roots that exist here.
     available = []

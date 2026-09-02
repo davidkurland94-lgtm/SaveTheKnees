@@ -1,55 +1,82 @@
-import { getGoldenStudies, getHealth } from "@/api";
-import { useAsync } from "@/lib";
+import { useState } from "react";
+import { Link } from "react-router";
+
+import { getHealth, getStudies } from "@/api";
+import { paths, useAsync, useUploadState } from "@/lib";
 import { ErrorState, Icon, Loading, NavBar } from "@/components/ui";
 import StudyTable from "@/components/studies/StudyTable";
-import UploadZone from "@/components/upload/UploadZone";
+import UploadStudyButton from "@/components/upload/UploadStudyButton";
 
-interface HomePageProps {
-  onUpload: (files: File[]) => void;
-  onOpenStudy: (studyUid: string) => void;
-  onOpenBenchmark: () => void;
-}
+const PAGE_SIZE = 20;
 
-export function HomePage({ onUpload, onOpenStudy, onOpenBenchmark }: HomePageProps) {
-  const golden = useAsync((signal) => getGoldenStudies(signal), []);
+export function HomePage() {
+  const { start, error, dismissError } = useUploadState();
+  const [page, setPage] = useState(0);
+  const studies = useAsync(
+    (signal) => getStudies(PAGE_SIZE, page * PAGE_SIZE, signal),
+    [page],
+  );
   const health = useAsync((signal) => getHealth(signal), []);
 
   return (
-    <div className="flex min-h-full flex-col bg-background">
+    <div className="flex h-full flex-col overflow-hidden bg-background">
       <NavBar>
-        <HealthPill
-          loading={health.loading}
-          status={health.error ? "unreachable" : health.data?.status}
-        />
-        <button
-          type="button"
-          onClick={onOpenBenchmark}
+        {/* In the bar, not in the table: adding a study is the one thing that
+            must stay reachable when the list itself fails to load. */}
+        <UploadStudyButton onFiles={start} />
+        <Link
+          to={paths.benchmark}
           className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-accent-soft hover:text-primary"
         >
           <Icon name="chart" size={13} />
           Benchmark
-        </button>
+        </Link>
       </NavBar>
 
-      <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-10 px-6 py-8">
-        <UploadZone onFiles={onUpload} />
+      <div className="mx-auto flex w-full min-h-0 max-w-7xl flex-1 flex-col gap-8 px-6 py-6">
+        {/* A failed upload lands back here, so this is where it reports. */}
+        {error && (
+          <div className="shrink-0">
+            <ErrorState message={error} onRetry={dismissError} />
+          </div>
+        )}
 
-        {golden.loading ? (
-          <Loading label="Loading the golden dataset…" />
-        ) : golden.error ? (
-          <ErrorState message={golden.error} onRetry={golden.reload} />
+        {studies.error ? (
+          <ErrorState message={studies.error} onRetry={studies.reload} />
+        ) : studies.data ? (
+          <StudyTable
+            studies={studies.data.studies}
+            total={studies.data.total}
+            page={page}
+            pageSize={PAGE_SIZE}
+            loading={studies.loading}
+            onPage={setPage}
+            className="flex-1"
+          />
         ) : (
-          <StudyTable studies={golden.data?.studies ?? []} onOpen={onOpenStudy} />
+          <Loading label="Loading studies…" />
         )}
       </div>
+
+      <HealthPill
+        loading={health.loading}
+        status={health.error ? "unreachable" : health.data?.status}
+      />
     </div>
   );
 }
 
+/**
+ * Whether `GET /health` answers, parked in the corner of the viewport.
+ *
+ * It sits below the nav bar in the stack (z-1 against its z-10) because the two
+ * never meet — one is pinned to the top of the window and this to the bottom —
+ * and anything the app raises later should be able to cover it.
+ */
 function HealthPill({ loading, status }: { loading: boolean; status?: string }) {
   const ok = status === "ok";
   return (
-    <div className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5">
+    <div className="fixed bottom-4 right-4 z-[1] flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 shadow-md">
       <span
         className={
           loading

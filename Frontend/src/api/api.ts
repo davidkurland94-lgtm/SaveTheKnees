@@ -20,6 +20,7 @@ import type {
   ReportPredictionResponse,
   ReportResponse,
   ReportTableResponse,
+  SeriesInstancesResponse,
   SeriesListResponse,
   ServiceInfo,
   StoredReportRecord,
@@ -28,6 +29,7 @@ import type {
   StudyInformation,
   StudyLabelsResponse,
   StudyPredictionResponse,
+  UploadedStudy,
   UploadSequenceResponse,
   VerdictsResponse,
 } from "@/interfaces";
@@ -144,6 +146,32 @@ export function seriesPreviewUrl(studyUid: string, seriesUid: string, columns = 
   });
 }
 
+/**
+ * `GET /studies/{uid}/series/{uid}/instances` — the raw DICOM file names, in
+ * scan order. Pair with `seriesInstanceUrl` to build Cornerstone image IDs.
+ */
+export function getSeriesInstances(
+  studyUid: string,
+  seriesUid: string,
+  signal?: AbortSignal,
+): Promise<SeriesInstancesResponse> {
+  return requestJson<SeriesInstancesResponse>(
+    `/studies/${encode(studyUid)}/series/${encode(seriesUid)}/instances`,
+    { signal },
+  );
+}
+
+/**
+ * URL of one raw DICOM slice. A URL rather than a blob because the viewer's own
+ * loader does the fetching, decoding and caching — handing it bytes would mean
+ * doing all three twice.
+ */
+export function seriesInstanceUrl(studyUid: string, seriesUid: string, instance: string): string {
+  return buildUrl(
+    `/studies/${encode(studyUid)}/series/${encode(seriesUid)}/instances/${encode(instance)}`,
+  );
+}
+
 // ─── Inference on uploads ─────────────────────────────────────────────────────
 
 /**
@@ -157,6 +185,31 @@ export function predictSeries(files: File[], signal?: AbortSignal): Promise<Pred
   const form = new FormData();
   for (const file of files) form.append("files", file, file.name);
   return requestJson<PredictionResponse>("/predict", { method: "POST", body: form, signal });
+}
+
+/**
+ * `POST /upload/study` — store a folder of DICOM as a new study.
+ *
+ * Unlike `predictSeries`, which scores and forgets, this one keeps: the study
+ * gets a UID in the corpus's own form, appears in `GET /studies`, and opens in
+ * the viewer. The server splits the folder into its series by the
+ * SeriesInstanceUID in the headers, so one drop becomes the sagittal, coronal
+ * and axial runs it actually holds, and pre-fills the twelve labels from the
+ * image model. No report: that is the doctor's, written from these images.
+ */
+export function uploadStudy(
+  files: File[],
+  model: "multiplane" | "sagittal" = "multiplane",
+  signal?: AbortSignal,
+): Promise<UploadedStudy> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file, file.name);
+  return requestJson<UploadedStudy>("/upload/study", {
+    method: "POST",
+    query: { model },
+    body: form,
+    signal,
+  });
 }
 
 /** `POST /predict/report` — English report text in, twelve probabilities out. */
@@ -211,6 +264,12 @@ export function get3dMesh(studyUid: string, options?: { seriesUid?: string; plan
   return requestJson<Mesh3DResponse>(`/view/${encode(studyUid)}/3d_image_sequence`, { query: { series_uid: options?.seriesUid, plane: options?.plane, downsample: options?.downsample }, signal });
 }
 
+/** `GET /view/{study_uid}/2d_image_sequence` - the contact sheet as a blob, for
+ * splitting back into slices with `lib/splitContactSheet`. */
+export function view2dSheet(studyUid: string, options?: { seriesUid?: string; plane?: Plane; columns?: number }, signal?: AbortSignal): Promise<Blob> {
+  return requestBlob(`/view/${encode(studyUid)}/2d_image_sequence`, { query: { series_uid: options?.seriesUid, plane: options?.plane, columns: options?.columns }, signal });
+}
+
 /** URL of `GET /view/{study_uid}/2d_image_sequence` - contact sheet PNG for <img src>. */
 export function view2dUrl(studyUid: string, options?: { seriesUid?: string; plane?: Plane; columns?: number }): string {
   return buildUrl(`/view/${encode(studyUid)}/2d_image_sequence`, { series_uid: options?.seriesUid, plane: options?.plane, columns: options?.columns });
@@ -244,6 +303,8 @@ export const api = {
   getStudyReport,
   predictStudy,
   getSeriesTensor,
+  getSeriesInstances,
+  seriesInstanceUrl,
   seriesPreviewUrl,
   predictSeries,
   predictReport,
@@ -252,8 +313,10 @@ export const api = {
   getReportVerdicts,
   getModelSummary,
   uploadImageSequence,
+  uploadStudy,
   getStudyInformation,
   get3dMesh,
+  view2dSheet,
   view2dUrl,
   createStudyReport,
   updateStudyReport,

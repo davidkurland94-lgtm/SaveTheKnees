@@ -191,6 +191,39 @@ def predict_study_with(study_uid, model="fusion", data_root=None):
     return {label: float(p) for label, p in zip(LABELS, probs)}
 
 
+def predict_from_dirs(dirs_by_axis, model="multiplane"):
+    """{axis: series directory} -> {label: probability}, straight off the DICOM.
+
+    predict_study_with reads the tensor cache, which only exists for the corpus:
+    it was built once, offline, for the 4,407 dataset studies. A study uploaded
+    a second ago is in no cache, so this builds its tensors on the spot with the
+    same sequence_to_tensor the cache was made from -- same crop, same window,
+    same resize -- and feeds them to the same checkpoints.
+
+    axis is "X" sagittal, "Y" coronal, "Z" axial, as everywhere else.
+    Returns None when a plane the model needs has no readable series, so the
+    caller can fall back rather than serve numbers from a half-empty input.
+    """
+    import numpy as np
+
+    models = _load_study_models(model)
+    if not models:
+        raise FileNotFoundError(f"no checkpoint for '{model}' under models/")
+
+    axes = ("X",) if model == "sagittal" else ("X", "Y", "Z")
+    if not all(axis in dirs_by_axis for axis in axes):
+        return None
+
+    tensors = [sequence_to_tensor(dirs_by_axis[axis]) for axis in axes]
+    if any(x is None for x in tensors):
+        return None
+
+    inputs = [x[None, ...] for x in tensors]
+    feed = inputs if len(inputs) > 1 else inputs[0]
+    probs = np.mean([m.predict(feed, verbose=0)[0] for m in models], axis=0)
+    return {label: float(p) for label, p in zip(LABELS, probs)}
+
+
 if __name__ == "__main__":
     import pandas as pd
 

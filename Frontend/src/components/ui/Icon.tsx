@@ -15,7 +15,12 @@ export type IconName =
   | "arrow-left"
   | "chart"
   | "document"
-  | "alert";
+  | "alert"
+  | "play"
+  | "pause"
+  | "layers"
+  | "cube"
+  | "reset";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   logo: (
@@ -87,6 +92,32 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <circle cx="12" cy="12" r="10" />
       <line x1="12" y1="8" x2="12" y2="12" />
       <line x1="12" y1="16" x2="12.01" y2="16" />
+    </>
+  ),
+  play: <polygon points="7 4 20 12 7 20" fill="currentColor" />,
+  pause: (
+    <>
+      <rect x="7" y="4" width="3.5" height="16" rx="1" fill="currentColor" />
+      <rect x="13.5" y="4" width="3.5" height="16" rx="1" fill="currentColor" />
+    </>
+  ),
+  layers: (
+    <>
+      <polygon points="12 2 22 7 12 12 2 7" />
+      <polyline points="2 12 12 17 22 12" />
+      <polyline points="2 17 12 22 22 17" />
+    </>
+  ),
+  cube: (
+    <>
+      <path d="M12 2 21 7v10l-9 5-9-5V7z" />
+      <path d="M3 7l9 5 9-5M12 12v10" />
+    </>
+  ),
+  reset: (
+    <>
+      <path d="M3 12a9 9 0 1 0 2.6-6.3" />
+      <polyline points="3 3 3 9 9 9" />
     </>
   ),
 };

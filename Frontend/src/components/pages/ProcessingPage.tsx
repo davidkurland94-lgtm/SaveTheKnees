@@ -1,26 +1,31 @@
-import { cn, pluralize } from "@/lib";
+import { Navigate } from "react-router";
+
+import { cn, paths, pluralize, useUploadState } from "@/lib";
 import { Icon, NavBar } from "@/components/ui";
 
-/** Index of the step currently running. */
-export type ProcessingStep = 0 | 1 | 2;
-
 const STEPS = [
-  "Decoding DICOM slices in the browser",
-  "Uploading the series to /predict",
-  "Running the image model",
+  "Reading the folder",
+  "Storing the study and pre-filling its labels",
 ];
 
-interface ProcessingPageProps {
-  fileCount: number;
-  step: ProcessingStep;
-}
-
 /**
- * Progress while an uploaded series is scored. The step is driven by the actual
- * upload pipeline rather than a timer, so it cannot claim work that has not
- * happened.
+ * Progress while a dropped folder becomes a stored study. The step is driven by
+ * the actual upload pipeline rather than a timer, so it cannot claim work that
+ * has not happened — which is why there are two steps and not four: the server
+ * splits the folder into series and runs the model inside one request, and this
+ * screen cannot see where inside it the work has got to.
  */
-export function ProcessingPage({ fileCount, step }: ProcessingPageProps) {
+export function ProcessingPage() {
+  const { fileCount, step, studyUid, error } = useUploadState();
+
+  // Addressable but not resumable: the files being scored only exist in the tab
+  // that dropped them. `fileCount` is the one thing a run sets before it
+  // navigates here, so it is what says whether this tab has a run at all.
+  if (fileCount === 0 || error) return <Navigate to={paths.home} replace />;
+  // The run this screen was following already finished — a reopened /processing
+  // should not sit on a spinner for work that is done.
+  if (studyUid) return <Navigate to={paths.study(studyUid)} replace />;
+
   return (
     <div className="flex min-h-full flex-col bg-background">
       <NavBar />
@@ -46,7 +51,7 @@ export function ProcessingPage({ fileCount, step }: ProcessingPageProps) {
           </div>
 
           <div>
-            <h2 className="mb-2 text-2xl text-foreground">Analysing series</h2>
+            <h2 className="mb-2 text-2xl text-foreground">Adding study</h2>
             <p className="text-sm text-muted-foreground">{pluralize(fileCount, "file")}</p>
           </div>
 

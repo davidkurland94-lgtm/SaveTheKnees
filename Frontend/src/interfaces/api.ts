@@ -78,6 +78,8 @@ export interface StudyListEntry {
   study_uid: string;
   golden: boolean;
   has_report: boolean;
+  /** "upload" for studies added through the app; absent on older responses. */
+  source?: "upload" | "dataset";
 }
 
 /** `GET /studies` */
@@ -101,6 +103,31 @@ export interface GoldenStudiesResponse {
   studies: GoldenStudy[];
 }
 
+/** One series of an uploaded study, as `POST /upload/study` reports it. */
+export interface UploadedSeries extends Series {
+  /** SeriesDescription off the scanner, when it wrote one. */
+  description?: string;
+}
+
+/**
+ * `POST /upload/study` — a stored study, built from a folder of DICOM.
+ *
+ * `predicted_labels` is a model's read, not a radiologist's: it is kept under
+ * its own key, beside the name of the model that produced it, so it can never
+ * be mistaken for the hand-labelled ground truth. `has_report` starts false by
+ * design — writing it is the doctor's job.
+ */
+export interface UploadedStudy extends Omit<StudyDetail, "series"> {
+  series: UploadedSeries[];
+  source: "upload";
+  created_at: string;
+  predicted_labels: Record<string, number> | null;
+  label_model: string | null;
+  /** DICOM files stored, and files in the drop that were not DICOM. */
+  n_files: number;
+  skipped: number;
+}
+
 /** `GET /studies/{study_uid}` */
 export interface StudyDetail {
   study_uid: string;
@@ -117,6 +144,20 @@ export interface SeriesListResponse {
   study_uid: string;
   count: number;
   series: Series[];
+}
+
+/**
+ * `GET /studies/{uid}/series/{uid}/instances` — the raw DICOM file names.
+ *
+ * Ordered along the scan axis by the server. A browser-side DICOM reader reads
+ * geometry from the first, middle and last instance only and takes the rest of
+ * the order on trust, so this array is what puts the volume the right way up.
+ */
+export interface SeriesInstancesResponse {
+  study_uid: string;
+  series_uid: string;
+  count: number;
+  instances: string[];
 }
 
 /** `GET /studies/{study_uid}/labels` — the pilkwang report-derived labels. */

@@ -84,6 +84,8 @@ steps:
       - --add-volume-mount=volume=data,mount-path=/mnt/data
       - --add-volume=name=models,type=cloud-storage,bucket=${_MODEL_BUCKET},readonly=true
       - --add-volume-mount=volume=models,mount-path=/mnt/models
-      - --set-env-vars=DATA_ROOT=/mnt/data,MODEL_PATH=/mnt/models/knee_findings.keras,WRITE_ROOT=/tmp/stk,ALLOWED_ORIGINS=${_ALLOWED_ORIGINS}
+      - --add-volume=name=write,type=cloud-storage,bucket=${_DATA_BUCKET}
+      - --add-volume-mount=volume=write,mount-path=/mnt/write
+      - --set-env-vars=DATA_ROOT=/mnt/data,MODEL_PATH=/mnt/models/knee_findings.keras,WRITE_ROOT=/mnt/write/stk,ALLOWED_ORIGINS=${_ALLOWED_ORIGINS}
 
 timeout: 2400s
