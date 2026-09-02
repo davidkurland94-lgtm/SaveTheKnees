@@ -20,8 +20,3 @@ import type { StoredReportRecord } from "@/interfaces";
 export function englishReport(record: StoredReportRecord): string {
   return record.report_en?.trim() || record.text;
 }
-
-/** Whether the stored English is a translation rather than the text itself. */
-export function wasTranslated(record: StoredReportRecord): boolean {
-  return Boolean(record.report_en?.trim()) && record.report_en?.trim() !== record.text.trim();
-}

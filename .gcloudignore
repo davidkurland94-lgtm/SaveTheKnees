@@ -25,6 +25,11 @@ Docs/
 david_not_public/
 api/
 
+# The React front end. 471 MB of node_modules, and the serving image COPYs
+# only functions/, serving/ and models/ -- none of this has ever been in the
+# container. Without this line every build ships half a gigabyte.
+Frontend/
+
 **/__pycache__/
 *.py[cod]
 .ipynb_checkpoints/

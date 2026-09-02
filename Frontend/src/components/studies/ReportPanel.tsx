@@ -1,25 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import {
-  describeError,
-  getReportTerms,
-  getStudyReport,
-  predictReport,
-  saveStudyReport,
-} from "@/api";
-import type { LabelScores, ReportLang, ReportResponse, StoredReportRecord } from "@/interfaces";
-import {
-  cn,
-  createPromiseCache,
-  englishReport,
-  markTerms,
-  pluralize,
-  toFindings,
-  useAsync,
-  wasTranslated,
-} from "@/lib";
-import { Button, ErrorState, Icon, Loading, Spinner } from "@/components/ui";
-import FindingList from "@/components/viewer/FindingList";
+import { describeError, getReportTerms, getStudyReport, saveStudyReport } from "@/api";
+import type { ReportLang, ReportResponse, StoredReportRecord } from "@/interfaces";
+import { cn, createPromiseCache, englishReport, markTerms, pluralize, useAsync } from "@/lib";
+import { ErrorState, Icon, Spinner } from "@/components/ui";
 
 /**
  * The dictionary, fetched once for the whole session.
@@ -39,37 +23,22 @@ const loadTerms = () =>
   );
 
 /**
- * Report model runs, keyed by the text itself rather than by the study.
+ * The two ways to read the same report.
  *
- * The panel scores automatically, so without this every switch between the two
- * reports — and every remount as the reader moves around the study — would send
- * the same paragraph to the same model again. Keying on the text is what makes
- * "saved, then reopened" free while a genuine edit still scores.
+ * "As written" is the editable one and the only one that is ever saved.
+ * "English" is derived and read-only — it is the text the models were handed,
+ * with the report model's own vocabulary underlined.
  */
-const cachedScores = createPromiseCache<LabelScores>(30);
-
-const scoreText = (text: string) =>
-  cachedScores(text, () => predictReport(text).then((response) => response.predictions));
-
 const LANGS: Array<{ id: ReportLang; label: string; hint: string }> = [
-  { id: "original", label: "As written", hint: "Exactly as the dataset ships it" },
-  { id: "en", label: "English", hint: "Machine translation" },
+  { id: "original", label: "As written", hint: "The report itself — edit and save here" },
+  { id: "en", label: "English", hint: "What the models read" },
 ];
-
-/**
- * Which report the panel is showing.
- *
- * "mine" is the doctor's, written here. "dataset" is the radiologist's, shipped
- * with the corpus and read-only — an uploaded study has no such thing, which is
- * why the tab for it only appears when there is one.
- */
-type Source = "mine" | "dataset";
 
 interface ReportPanelProps {
   studyUid: string;
-  /** The dataset's radiologist report, or null for an uploaded study. */
+  /** The report this study shipped with, or null for an uploaded one. */
   dataset: ReportResponse | null;
-  /** The doctor's own report as the API last stored it; null until written. */
+  /** The report as this app last stored it; null until it has been saved here. */
   stored: StoredReportRecord | null;
   /** Handed the record the save returned, so the page can unlock Fusion. */
   onSaved: (record: StoredReportRecord) => void;
@@ -77,59 +46,82 @@ interface ReportPanelProps {
 }
 
 /**
- * The report, and what the report model makes of it.
+ * The study's report: read it, edit it, save it.
+ *
+ * There is deliberately no "mine versus the radiologist's" split here. Every
+ * report in this project was written by a doctor reading these images; the only
+ * difference between one that shipped with the corpus and one typed in this app
+ * is which doctor, and when. So the panel opens whatever text the study already
+ * has, lets it be edited, and saves it. An uploaded study opens empty, because
+ * nobody has read it yet.
+ *
+ * NO SCORES LIVE HERE. Saving translates the report server-side and hands it to
+ * the fusion model as its second input, so what the report did to the answer
+ * shows up in the rail — in the numbers that change when Fusion re-runs. Twelve
+ * more probabilities beside the text would be a second, weaker reading of the
+ * same study competing with the one the page is actually built to give.
  *
  * Laid out as a wide row to sit beneath the viewers: prose reads badly in a
  * narrow rail, and putting it under the images is what lets someone read a line
- * of the report and look straight up at the slice it describes. The panel keeps
- * its own height and scrolls inside it, so a long report never pushes the
- * viewers off the screen.
- *
- * THE ORDER THIS ENFORCES. A study arrives as images and nothing else, so the
- * image models can run immediately and there is nothing for the report model to
- * read. The doctor writes the report from those images; saving it translates it
- * server-side and scores it here, without being asked — a report that has to be
- * scored by pressing a button is a report whose score is usually missing, and
- * the fusion model upstairs needs it to exist, not to have been requested.
+ * of the report and look straight up at the slice it describes.
  */
 export function ReportPanel({ studyUid, dataset, stored, onSaved, className }: ReportPanelProps) {
-  // Opens on whichever report the study actually has, and on the doctor's when
-  // it has both: this panel is somewhere to write, and only incidentally an
-  // archive of what the corpus shipped.
-  const [source, setSource] = useState<Source>(() => (!stored && dataset ? "dataset" : "mine"));
   const [lang, setLang] = useState<ReportLang>("original");
   const terms = useAsync(loadTerms, []);
 
+  // The draft lives here rather than in the editor because the English view
+  // needs to know whether it is behind it.
+  const original = stored?.text ?? dataset?.report ?? "";
+  const [draft, setDraft] = useState(original);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Re-seeds when a save lands, and only then: while the doctor is typing the
+  // record does not move, so the draft is never pulled out from under them.
+  useEffect(() => {
+    setDraft(stored?.text ?? dataset?.report ?? "");
+  }, [stored?.updated_at]);
+
   /**
-   * The English behind whichever report is showing — what the model reads.
+   * The English behind the report — the text the models actually read.
    *
-   * Two different provenances, deliberately not merged. The doctor's was
-   * translated by the server when it was saved and travels inside the record,
-   * so reading it costs nothing. The dataset's comes from the translation cache
-   * built once, offline, over the corpus; a study missing from it has no
-   * English and therefore no score, which is a real answer rather than a
-   * failure.
+   * Two provenances for the same one report. Once it has been saved here the
+   * server has already translated it and the English travels inside the record,
+   * so reading it costs nothing. Before that, a corpus report's English comes
+   * from the translation cache built once, offline, over the whole dataset; a
+   * study missing from that cache simply has no English rendering to show.
    */
   const english = useAsync(
     async (signal): Promise<{ text: string; language: string } | null> => {
-      if (source === "mine") {
-        if (!stored) return null;
-        return { text: englishReport(stored), language: stored.language ?? "unknown" };
-      }
+      if (stored) return { text: englishReport(stored), language: stored.language ?? "unknown" };
       if (!dataset) return null;
       if (dataset.language === "en") return { text: dataset.report, language: "en" };
       const translated = await getStudyReport(studyUid, "en", signal).catch(() => null);
       return translated ? { text: translated.report, language: dataset.language } : null;
     },
-    [studyUid, source, stored?.updated_at, dataset?.report],
+    [studyUid, stored?.updated_at, dataset?.report],
   );
 
-  // No abort signal: a run cancelled halfway leaves nothing in the cache, and
-  // flipping between the two reports is exactly the case the cache is for.
-  const scores = useAsync(async () => {
-    const text = english.data?.text.trim();
-    return text ? scoreText(text) : null;
-  }, [english.data?.text]);
+  const text = draft.trim();
+  // Saving is for changes and nothing else. A report opened and left alone —
+  // whether it came from the corpus or from a previous save — has nothing to
+  // write, so the control is dead until the text actually differs.
+  const edited = text !== original.trim();
+  const savable = Boolean(text) && edited;
+
+  const save = useCallback(async () => {
+    const body = draft.trim();
+    if (!body || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      onSaved(await saveStudyReport(studyUid, body, { exists: Boolean(stored) }));
+    } catch (cause) {
+      setError(describeError(cause));
+    } finally {
+      setSaving(false);
+    }
+  }, [draft, saving, studyUid, stored, onSaved]);
 
   return (
     <section
@@ -142,33 +134,42 @@ export function ReportPanel({ studyUid, dataset, stored, onSaved, className }: R
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-sm text-foreground">Report</h2>
 
-          {dataset && (
-            <Segmented
-              options={[
-                { id: "mine", label: "Mine", hint: "The report you write from these images" },
-                {
-                  id: "dataset",
-                  label: "Radiologist",
-                  hint: "The report the dataset ships with this study",
-                },
-              ]}
-              value={source}
-              onChange={(next) => setSource(next as Source)}
-            />
-          )}
+          <div className="flex gap-1 rounded-lg bg-muted p-0.5">
+            {LANGS.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                title={entry.hint}
+                aria-pressed={lang === entry.id}
+                onClick={() => setLang(entry.id)}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-[11px] font-semibold transition-all",
+                  lang === entry.id
+                    ? "bg-white text-primary shadow-sm"
+                    : "text-muted-foreground hover:text-primary",
+                )}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
-          {source === "dataset" && (
-            <Segmented
-              options={LANGS}
-              value={lang}
-              onChange={(next) => setLang(next as ReportLang)}
-            />
-          )}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Where the text came from. Not a mode to switch between — just the
+              provenance of the one report being edited. */}
+          <span className="text-[11px] text-muted-foreground">
+            {stored
+              ? `Saved by ${stored.author}`
+              : dataset
+                ? "As the study was reported"
+                : "Not written yet"}
+          </span>
 
           {english.data && english.data.language !== "en" && (
             <span
               className="font-mono text-[10px] text-subtle"
-              title="Detected language of the text as written. The model reads the English rendering."
+              title="Detected language of the text as written. The models read the English rendering."
             >
               {english.data.language} → en
             </span>
@@ -176,198 +177,129 @@ export function ReportPanel({ studyUid, dataset, stored, onSaved, className }: R
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-col gap-4 p-4 lg:flex-row">
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          {source === "mine" ? (
-            <MyReportEditor
-              studyUid={studyUid}
-              stored={stored}
-              onSaved={onSaved}
-              terms={terms.data ?? []}
+      <div className="flex min-h-0 flex-col gap-2 p-4">
+        {lang === "original" ? (
+          /* Relative so the save control can sit in the corner of the box it
+             saves, rather than on a row of its own below it. */
+          <div className="relative">
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              // The one control on the panel, reachable without leaving the text.
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  void save();
+                }
+              }}
+              spellCheck
+              placeholder="Findings from these images…"
+              aria-label="Report for this study"
+              // Fixed height, not resizable: the corner belongs to the save
+              // control, and a box that grows would push the viewers off the
+              // screen. Long reports scroll inside it.
+              className="h-36 w-full resize-none overflow-y-auto rounded-xl border border-border bg-background p-3 pb-9 text-sm leading-relaxed text-foreground outline-none transition-colors placeholder:text-subtle focus:border-accent-soft"
             />
-          ) : (
-            <DatasetReport studyUid={studyUid} lang={lang} terms={terms.data ?? []} />
-          )}
-        </div>
+            <SaveButton
+              saving={saving}
+              savable={savable}
+              edited={edited}
+              stored={stored}
+              onSave={save}
+            />
+          </div>
+        ) : english.loading ? (
+          <div className="flex h-36 items-center justify-center gap-2 rounded-xl border border-border bg-background text-xs text-muted-foreground">
+            <Spinner className="h-3.5 w-3.5" />
+            Loading the English rendering…
+          </div>
+        ) : english.data ? (
+          <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-background p-3">
+            <MarkedText text={english.data.text} terms={terms.data ?? []} className="h-28" />
+            {edited && (
+              <p className="text-[10px] text-amber-600">
+                This is the saved text. Unsaved edits are translated when you save.
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="flex h-36 items-center justify-center rounded-xl border border-dashed border-border px-4 text-center text-xs text-muted-foreground">
+            No English rendering yet — saving the report produces one.
+          </p>
+        )}
 
-        {/* Beside the text rather than under it: the point of scoring a report
-            is to read the two against each other. */}
-        <div className="lg:w-80 lg:shrink-0">
-          <ScorePanel
-            findings={scores.data}
-            // `english` resolving to null means there is nothing to score, and
-            // that is already known — without this the empty state flashes a
-            // spinner for a request that is never sent.
-            loading={english.loading || (Boolean(english.data) && scores.loading)}
-            error={scores.error ?? english.error}
-            onRetry={scores.reload}
-            empty={
-              source === "mine"
-                ? "Nothing written yet. Save a report and it is translated, scored here by the report model, and — with the images — becomes the fusion model's second half."
-                : "No English rendering of this report is cached on the server, so the report model has nothing to read."
-            }
-          />
-        </div>
+        {error && <ErrorState message={error} onRetry={save} />}
       </div>
     </section>
   );
 }
 
-/** The small pill groups in the header — one shape, three uses. */
-function Segmented<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: Array<{ id: T; label: string; hint: string }>;
-  value: T;
-  onChange: (next: T) => void;
-}) {
-  return (
-    <div className="flex gap-1 rounded-lg bg-muted p-0.5">
-      {options.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          title={option.hint}
-          aria-pressed={value === option.id}
-          onClick={() => onChange(option.id)}
-          className={cn(
-            "rounded-md px-2.5 py-1 text-[11px] font-semibold transition-all",
-            value === option.id
-              ? "bg-white text-primary shadow-sm"
-              : "text-muted-foreground hover:text-primary",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 /**
- * The doctor's report: a text area, a save, and nothing else to press.
+ * Save, in the corner of the box it saves.
  *
- * The draft is local until saved and re-seeded from the record afterwards, so
- * `updated_at` moving is what ends an edit. That also means a save that fails
- * leaves the text in the box rather than reverting it — the one state in which
- * losing the draft would matter most.
+ * The icon carries the state that used to need a sentence beside it: a spinner
+ * while the round trip runs, a tick once what is on screen is what is stored,
+ * and the save glyph only when there is genuinely something to write. The
+ * detail people actually want — when it was last saved — is in the tooltip,
+ * which is where a timestamp belongs when it is reassurance rather than
+ * information.
  */
-function MyReportEditor({
-  studyUid,
+function SaveButton({
+  saving,
+  savable,
+  edited,
   stored,
-  onSaved,
-  terms,
+  onSave,
 }: {
-  studyUid: string;
+  saving: boolean;
+  savable: boolean;
+  edited: boolean;
   stored: StoredReportRecord | null;
-  onSaved: (record: StoredReportRecord) => void;
-  terms: string[];
+  onSave: () => void;
 }) {
-  const [draft, setDraft] = useState(stored?.text ?? "");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setDraft(stored?.text ?? "");
-  }, [stored?.updated_at]);
-
-  const text = draft.trim();
-  const dirty = text !== (stored?.text.trim() ?? "");
-
-  const save = useCallback(async () => {
-    const body = draft.trim();
-    if (!body || saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      onSaved(await saveStudyReport(studyUid, body));
-    } catch (cause) {
-      setError(describeError(cause));
-    } finally {
-      setSaving(false);
-    }
-  }, [draft, saving, studyUid, onSaved]);
+  const saved = Boolean(stored) && !edited;
+  const title = saving
+    ? "Saving…"
+    : savable
+      ? `${stored ? "Save changes" : "Save report"} — ⌘/Ctrl + Enter`
+      : saved && stored
+        ? `No changes — last saved ${new Date(stored.updated_at).toLocaleString()}`
+        : "No changes to save";
 
   return (
-    <>
-      <textarea
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        // The one control on the panel, reachable without leaving the text.
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault();
-            void save();
-          }
-        }}
-        spellCheck
-        placeholder="Findings from these images…"
-        aria-label="Your report for this study"
-        className="min-h-32 w-full resize-y rounded-xl border border-border bg-background p-3 text-sm leading-relaxed text-foreground outline-none transition-colors placeholder:text-subtle focus:border-accent-soft"
-      />
-
-      <div className="flex flex-wrap items-center gap-3">
-        <Button onClick={save} disabled={saving || !text || !dirty} className="px-3 py-1.5 text-xs">
-          {saving ? "Saving…" : stored ? "Save changes" : "Save report"}
-        </Button>
-
-        {saving ? (
-          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Spinner className="h-3 w-3" />
-            Storing, translating, scoring…
-          </span>
-        ) : dirty && text ? (
-          <span className="text-[11px] text-muted-foreground">
-            Unsaved — ⌘/Ctrl + Enter saves.
-          </span>
-        ) : stored ? (
-          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Icon name="check" size={11} strokeWidth={3} className="text-emerald-600" />
-            Saved {new Date(stored.updated_at).toLocaleString()}
-          </span>
-        ) : null}
-      </div>
-
-      {error && <ErrorState message={error} onRetry={save} />}
-
-      {stored && wasTranslated(stored) && (
-        <details className="rounded-xl border border-border-soft bg-background px-3 py-2">
-          <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">
-            What the model read (translated to English)
-          </summary>
-          <MarkedText text={englishReport(stored)} terms={terms} className="mt-2 max-h-32" />
-        </details>
+    <button
+      type="button"
+      onClick={onSave}
+      disabled={saving || !savable}
+      title={title}
+      aria-label={title}
+      className={cn(
+        "absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-lg border transition-colors",
+        saving
+          ? "border-border text-muted-foreground"
+          : savable
+            ? "border-accent bg-primary text-primary-foreground hover:bg-primary-hover"
+            : saved
+              ? "border-transparent text-emerald-600"
+              : "border-transparent text-subtle",
       )}
-    </>
+    >
+      {saving ? (
+        <Spinner className="h-3.5 w-3.5" />
+      ) : saved ? (
+        <Icon name="check" size={13} strokeWidth={3} />
+      ) : (
+        <Icon name="save" size={13} />
+      )}
+    </button>
   );
-}
-
-/** The corpus's own report — read-only, in the dataset's language or in English. */
-function DatasetReport({
-  studyUid,
-  lang,
-  terms,
-}: {
-  studyUid: string;
-  lang: ReportLang;
-  terms: string[];
-}) {
-  const report = useAsync((signal) => getStudyReport(studyUid, lang, signal), [studyUid, lang]);
-
-  if (report.loading) return <Loading label="Loading report…" />;
-  if (report.error) return <ErrorState message={report.error} onRetry={report.reload} />;
-  if (!report.data) return null;
-  return <MarkedText text={report.data.report} terms={terms} className="max-h-40" />;
 }
 
 /**
  * Report text with the report model's own vocabulary underlined.
  *
  * A mark means "the model counted this term", never "this is why the number
- * came out that way" — the API serves the dictionary, not per-term weights. The
- * dictionary is English, so text in another language simply has nothing to mark.
+ * came out that way" — the API serves the dictionary, not per-term weights.
  */
 function MarkedText({
   text,
@@ -411,46 +343,6 @@ function MarkedText({
           much each one moved the answer.
         </p>
       )}
-    </div>
-  );
-}
-
-/** The right-hand column: the report model's twelve numbers, or why there are none. */
-function ScorePanel({
-  findings,
-  loading,
-  error,
-  onRetry,
-  empty,
-}: {
-  findings: LabelScores | null;
-  loading: boolean;
-  error: string | null;
-  onRetry: () => void;
-  empty: string;
-}) {
-  if (error) return <ErrorState message={error} onRetry={onRetry} />;
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-background px-4 py-8 text-xs text-muted-foreground">
-        <Spinner className="h-3.5 w-3.5" />
-        Scoring the report…
-      </div>
-    );
-  }
-  if (!findings) {
-    return (
-      <p className="rounded-xl border border-dashed border-border px-4 py-6 text-xs leading-relaxed text-muted-foreground">
-        {empty}
-      </p>
-    );
-  }
-  return (
-    <div className="max-h-40 overflow-y-auto rounded-xl border border-border bg-background p-4">
-      <FindingList
-        findings={toFindings(findings, { sortByProbability: true })}
-        note="The text beside this, scored by the report model — independent of the images."
-      />
     </div>
   );
 }
