@@ -1,5 +1,7 @@
 /** Minimal reader for the `.npy` the tensor endpoint serves. */
 
+import type { ModelVolume } from "@/interfaces";
+
 export interface NpyArray {
   /** Dimensions in C order, trailing singleton axes dropped. */
   shape: number[];
@@ -44,4 +46,19 @@ export function parseNpy(buffer: ArrayBuffer): NpyArray {
   // The tensor ships a trailing channel axis of 1; it carries no information.
   while (shape.length > 3 && shape[shape.length - 1] === 1) shape.pop();
   return { shape, data };
+}
+
+/**
+ * The model's tensor in the form the 3D viewer wants it.
+ *
+ * `GET /studies/{uid}/series/{uid}/tensor` ships `(24, 224, 224, 1)`; `parseNpy`
+ * drops the channel axis, and this is the guard that the rest really is a
+ * volume rather than something the endpoint changed its mind about.
+ */
+export function npyToVolume(buffer: ArrayBuffer): ModelVolume {
+  const { shape, data } = parseNpy(buffer);
+  if (shape.length !== 3) {
+    throw new Error(`Expected a 3D tensor, got (${shape.join(", ")})`);
+  }
+  return { shape: [shape[0], shape[1], shape[2]], data };
 }

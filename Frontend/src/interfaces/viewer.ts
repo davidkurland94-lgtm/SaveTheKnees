@@ -44,20 +44,50 @@ export interface ViewerStack {
   description?: string;
   /**
    * `(slice, row, column)` spacing in millimetres, exactly as
-   * `GET /view/{uid}/3d_image_sequence` reports it.
+   * `GET /view/{uid}/3d_image_sequence` reports it. Omit it and the 3D viewer
+   * falls back to a ratio that keeps the volume from rendering flat — see
+   * `buildModelVolume`.
    */
   spacingMm?: [number, number, number];
   /**
-   * Cornerstone image IDs for the raw DICOM slices, in scan order — what
-   * `Dicom3DViewer` builds its volume from.
+   * The model's own input tensor — what `Dicom3DViewer` builds its volume from.
    *
-   * Separate from `slices` because the two viewers want different things from
-   * the same series. `slices` is the model's view: 24 tiles, 224 square,
-   * already windowed, no geometry. Cornerstone wants the files, so it can read
-   * the real millimetres out of the headers and reconstruct a volume — which is
-   * the whole reason it can reslice and volume-render where a stack of PNGs
-   * could only be leafed through. The page still does the fetching (of the
-   * *list*); the loader behind these IDs streams the pixels itself.
+   * The same pixels `slices` holds, in the form a volume needs them. `slices`
+   * is the contact sheet cut back apart, which is right for leafing through one
+   * plane at a time; this is the whole `(24, 224, 224)` block, which is what
+   * Cornerstone can actually render as a volume. Both come out of
+   * `sequence_to_tensor` on the server, so the two viewers cannot disagree
+   * about what the model was shown.
+   */
+  volume?: ModelVolume;
+  /**
+   * Cornerstone image IDs for the study's own DICOM files, in scan order —
+   * what `DicomMprViewer` builds its volume from.
+   *
+   * The counterpart to `volume`, and deliberately a different thing. `volume`
+   * is what the model was shown; this is what the scanner wrote, with the
+   * geometry still in the headers. That is what makes the reference view able
+   * to reslice into all three planes, tie a point in one of them to the same
+   * point in the others, and report a length in millimetres that is true.
+   *
+   * The page fetches the *list*; the loader behind these IDs streams the pixels
+   * itself. Expect it to be populated only while the reference view is open —
+   * a full series is a large download to make on the chance someone opens it.
    */
   imageIds?: string[];
+}
+
+/**
+ * One series as the model receives it: `(slices, rows, columns)` float32,
+ * values in [0, 1].
+ *
+ * Exactly the payload of `GET /studies/{uid}/series/{uid}/tensor`, minus the
+ * trailing channel axis. The preprocessing that produces it — 24 slices sampled
+ * across the series, resized to 224 square, one percentile window for the whole
+ * run — throws the acquisition geometry away, so a page that wants the volume
+ * drawn to scale has to supply `spacingMm` separately.
+ */
+export interface ModelVolume {
+  shape: [number, number, number];
+  data: Float32Array;
 }

@@ -4,6 +4,7 @@ export * from "./cornerstone";
 export * from "./dicom";
 export * from "./format";
 export * from "./labels";
+export * from "./npy";
 export * from "./paths";
 export * from "./patients";
 export * from "./promiseCache";

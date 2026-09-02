@@ -49,6 +49,68 @@ export function StackTabs({ stacks, activeId, onSelect, detail }: StackTabsProps
   );
 }
 
+/** One choice in a `SegmentedTabs` row. */
+export interface SegmentedOption<T extends string> {
+  id: T;
+  label: string;
+  /** Tooltip; the place to say what the choice actually does. */
+  hint?: string;
+}
+
+interface SegmentedTabsProps<T extends string> {
+  options: ReadonlyArray<SegmentedOption<T>>;
+  active: T;
+  onSelect: (id: T) => void;
+}
+
+/**
+ * A row of small exclusive buttons — render modes, view switches, the tool
+ * palette. Styled to match `StackTabs`, which is the same idea one level up.
+ */
+export function SegmentedTabs<T extends string>({
+  options,
+  active,
+  onSelect,
+}: SegmentedTabsProps<T>) {
+  return (
+    <>
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          title={option.hint}
+          aria-pressed={active === option.id}
+          onClick={() => onSelect(option.id)}
+          className={cn(
+            "rounded-lg px-3 py-1 text-[11px] font-semibold transition-colors",
+            active === option.id
+              ? "bg-accent/20 text-accent"
+              : "text-white/40 hover:bg-white/5 hover:text-white/70",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The panel-level view switch, owned by the page and drawn by whichever viewer
+ * is currently in the slot — so the control sits with the thing it changes
+ * rather than floating above both.
+ */
+export interface ViewSwitch {
+  options: ReadonlyArray<SegmentedOption<string>>;
+  active: string;
+  onSelect: (id: string) => void;
+}
+
+/** Separates the page's view switch from a viewer's own controls. */
+export function ChromeDivider() {
+  return <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-white/10" />;
+}
+
 interface ViewerSliderProps {
   label: string;
   value: number;
