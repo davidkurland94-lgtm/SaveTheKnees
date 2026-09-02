@@ -21,10 +21,6 @@ export function HomePage() {
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background">
       <NavBar>
-        <HealthPill
-          loading={health.loading}
-          status={health.error ? "unreachable" : health.data?.status}
-        />
         {/* In the bar, not in the table: adding a study is the one thing that
             must stay reachable when the list itself fails to load. */}
         <UploadStudyButton onFiles={start} />
@@ -61,14 +57,26 @@ export function HomePage() {
           <Loading label="Loading studies…" />
         )}
       </div>
+
+      <HealthPill
+        loading={health.loading}
+        status={health.error ? "unreachable" : health.data?.status}
+      />
     </div>
   );
 }
 
+/**
+ * Whether `GET /health` answers, parked in the corner of the viewport.
+ *
+ * It sits below the nav bar in the stack (z-1 against its z-10) because the two
+ * never meet — one is pinned to the top of the window and this to the bottom —
+ * and anything the app raises later should be able to cover it.
+ */
 function HealthPill({ loading, status }: { loading: boolean; status?: string }) {
   const ok = status === "ok";
   return (
-    <div className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5">
+    <div className="fixed bottom-4 right-4 z-[1] flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 shadow-md">
       <span
         className={
           loading

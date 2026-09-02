@@ -1,8 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 
-import Icon from "./Icon";
-
 interface NavBarProps {
   /**
    * Where the brand links to. Left out it renders as plain text, which is what
@@ -16,9 +14,15 @@ interface NavBarProps {
 export function NavBar({ homeTo, children }: NavBarProps) {
   const brand = (
     <>
-      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-white">
-        <Icon name="logo" size={18} strokeWidth={2} />
-      </div>
+      {/* Decorative: the wordmark beside it already names the app, so an alt
+          here would only make a screen reader say it twice. */}
+      <img
+        src="/logo.webp"
+        alt=""
+        width={32}
+        height={32}
+        className="h-8 w-8 shrink-0 object-contain"
+      />
       <div>
         <div className="text-sm font-semibold text-foreground">Save the Knees</div>
         <div className="text-xs text-muted-foreground">Knee MRI finding detection</div>
