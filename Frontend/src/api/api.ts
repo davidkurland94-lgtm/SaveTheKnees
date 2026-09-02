@@ -34,7 +34,7 @@ import type {
   UploadSequenceResponse,
   VerdictsResponse,
 } from "@/interfaces";
-import { buildUrl, postJson, requestBlob, requestJson } from "./client";
+import { ApiError, buildUrl, postJson, requestBlob, requestJson } from "./client";
 
 const encode = encodeURIComponent;
 
@@ -281,6 +281,36 @@ export function view2dUrl(studyUid: string, options?: { seriesUid?: string; plan
   return buildUrl(`/view/${encode(studyUid)}/2d_image_sequence`, { series_uid: options?.seriesUid, plane: options?.plane, columns: options?.columns });
 }
 
+/**
+ * The doctor's report, saved without the caller having to know whether the
+ * study already has one.
+ *
+ * `POST` is a create and answers 409 on a study that already has a report;
+ * `PUT` is a replace and answers 404 on one that does not. Which of the two
+ * applies is server state, and the page's copy of it can be a minute old — a
+ * second tab, or a colleague, may have written one in between. So the create is
+ * tried first and its 409 is the signal to replace, rather than a guess made
+ * here being the thing that decides.
+ *
+ * The server translates on the way in, so what comes back carries both the text
+ * as written and the English the models read.
+ */
+export async function saveStudyReport(
+  studyUid: string,
+  text: string,
+  author = "team",
+  signal?: AbortSignal,
+): Promise<StoredReportRecord> {
+  try {
+    return await createStudyReport(studyUid, text, author, signal);
+  } catch (cause) {
+    if (cause instanceof ApiError && cause.status === 409) {
+      return updateStudyReport(studyUid, text, author, signal);
+    }
+    throw cause;
+  }
+}
+
 /** `POST /create/{study_uid}/sequence_report` - 409 if one already exists. */
 export function createStudyReport(studyUid: string, text: string, author = "team", signal?: AbortSignal): Promise<StoredReportRecord> {
   return postJson<StoredReportRecord>(`/create/${encode(studyUid)}/sequence_report`, { text, author }, { signal });
@@ -328,4 +358,5 @@ export const api = {
   createStudyReport,
   updateStudyReport,
   deleteStudyReport,
+  saveStudyReport,
 };

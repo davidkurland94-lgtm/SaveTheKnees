@@ -20,8 +20,6 @@ scikit-image==0.25.2
 
 # --- notebooks --------------------------------------------------------------
 seaborn==0.13.2
-deep-translator==1.11.4
-langdetect==1.0.9
 import-ipynb==0.2.1
 
 # Kevin's NLP / MONAI notebooks additionally need (heavy, several GB -- install

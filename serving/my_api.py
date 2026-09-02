@@ -41,7 +41,9 @@ OPENAPI_TAGS = [
     {"name": "upload", "description": "Add new DICOM series (stored under WRITE_ROOT)."},
     {"name": "views", "description": "Rendering: 3D mesh, 2D contact sheet, study information."},
     {"name": "reports", "description": "User-WRITTEN reports (create/update/delete) -- not the "
-     "dataset's radiology reports, those live under /studies/{uid}/report."},
+     "dataset's radiology reports, those live under /studies/{uid}/report. Saving one translates "
+     "it to English on the way in, which is what unlocks the report model and, with the images, "
+     "the fusion model."},
 ]
 
 app = FastAPI(
@@ -154,6 +156,15 @@ class StoredReport(BaseModel):
     author: str
     created_at: str
     updated_at: str
+    # Filled at save time, not at read time. Both the fusion model and
+    # POST /predict/report only understand English, and translating on every
+    # prediction would put a network call to Google in front of every score --
+    # so the English is written once, when the doctor saves.
+    #
+    # Defaulted rather than required: reports stored before this existed have
+    # neither field, and a record written last week is not a validation error.
+    language: str = "unknown"
+    report_en: str = ""
 
 
 class Prediction(BaseModel):
@@ -217,6 +228,31 @@ def get_report_model():
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def to_english(text: str) -> tuple[str, str]:
+    """(English text, detected source language) for a report a doctor typed.
+
+    The corpus reports were translated once, offline, into
+    data/meta/reports_en.csv; a report written in the app a second ago is in no
+    cache, so it is translated here on the way into the store.
+
+    Degrades rather than fails, twice over. deep-translator and langdetect are
+    small but they are still two more packages and one more outbound network
+    call than the rest of this API needs, so a deployment without them -- or a
+    translator that is down -- gets the ORIGINAL text back under the language
+    "unknown". Scoring a Spanish report with an English model is a worse answer
+    than scoring an English one, but it is a much better answer than refusing to
+    save the doctor's work.
+    """
+    try:
+        from functions.report_translation import translate_report
+    except ImportError:
+        return text, "unknown"
+    try:
+        return translate_report(text)
+    except Exception:                    # noqa: BLE001 -- any translator failure
+        return text, "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +387,13 @@ def predict_with_model(study_uid: str,
         # offline, for the corpus -- so it is scored straight off its DICOM.
         record = uploads.get(study_uid)
         if record is not None:
-            predictions, used = predict_uploaded(record, model)
+            # The doctor's report is the fusion model's fourth input. Read at
+            # request time rather than at upload time, because it is written
+            # after the upload -- that is the whole order of the workflow.
+            stored = load_reports().get(study_uid) or {}
+            predictions, used = predict_uploaded(record, model,
+                                                 report_text=stored.get("report_en")
+                                                 or stored.get("text"))
             if predictions is None:
                 raise HTTPException(422, f"Could not build tensors for {study_uid}")
             return {"study_uid": study_uid, "model": used, "predictions": predictions}
@@ -535,17 +577,23 @@ async def upload_new_sequence(
     }
 
 
-def predict_uploaded(record, model="multiplane"):
+def predict_uploaded(record, model="multiplane", report_text=None):
     """(predictions, model actually used) for an uploaded study.
 
-    Two substitutions happen here, and the caller is told about both through the
+    Substitutions happen here, and the caller is told about them through the
     returned name rather than being left to assume:
 
-    - fusion is impossible on an upload. It takes the report as an input and a
-      freshly uploaded study has no report by design -- writing it is the whole
-      point of the doctor's next step.
+    - fusion needs a report, and a freshly uploaded study has none by design --
+      writing it is the whole point of the doctor's next step. Until then the
+      images are all there is, which is exactly what multiplane scores. Once a
+      report is stored, `report_text` carries it and fusion runs for real.
     - multiplane needs all three planes. A folder holding only a sagittal run
       falls back to the single-plane model instead of failing.
+
+    report_text must be ENGLISH: it goes through the report model's vectorizer,
+    which was fitted on the translation cache. The stored report already carries
+    it -- POST /create translates on the way in -- so the caller passes
+    `report_en`, not `text`.
     """
     from functions.predict import predict_from_dirs
 
@@ -560,10 +608,13 @@ def predict_uploaded(record, model="multiplane"):
             if found is not None:
                 directories[axis] = found
 
-    wanted = "multiplane" if model == "fusion" else model
-    for name in dict.fromkeys([wanted, "sagittal"]):
+    text = str(report_text or "").strip()
+    wanted = model if (model != "fusion" or text) else "multiplane"
+    # Fusion degrades to the images alone before it degrades to one plane.
+    fallbacks = ["multiplane", "sagittal"] if wanted == "fusion" else ["sagittal"]
+    for name in dict.fromkeys([wanted, *fallbacks]):
         try:
-            result = predict_from_dirs(directories, name)
+            result = predict_from_dirs(directories, name, report_text=text or None)
         except FileNotFoundError:
             continue                     # that checkpoint is not on this box
         if result is not None:
@@ -952,15 +1003,23 @@ def model_summary(name: str):
           response_model=StoredReport, status_code=201)
 def create_report(study_uid: str, body: ReportIn):
     """Write a new report. 409 if one already exists -- overwriting is PUT's
-    job, and silently clobbering on POST is how people lose work."""
+    job, and silently clobbering on POST is how people lose work.
+
+    The stored record carries the English rendering beside the text as written
+    (`report_en`, `language`): everything downstream of a report -- the report
+    model behind POST /predict/report, the report branch of the fusion model --
+    was trained on English, and this is the one moment the text changes.
+    """
     require_study(study_uid)
     reports = load_reports()
     if study_uid in reports:
         raise HTTPException(409, f"A report for {study_uid} already exists; use PUT.")
 
     timestamp = now()
+    english, language = to_english(body.text)
     record = {"study_uid": study_uid, "text": body.text, "author": body.author,
-              "created_at": timestamp, "updated_at": timestamp}
+              "created_at": timestamp, "updated_at": timestamp,
+              "language": language, "report_en": english}
     reports[study_uid] = record
     save_reports(reports)
     return record
@@ -969,13 +1028,19 @@ def create_report(study_uid: str, body: ReportIn):
 @app.put("/update/{study_uid}/sequence_report", tags=["reports"],
          response_model=StoredReport)
 def update_report(study_uid: str, body: ReportIn):
-    """Replace an existing report. 404 if there is nothing to replace."""
+    """Replace an existing report. 404 if there is nothing to replace.
+
+    Re-translates: the English is a rendering of the text, so leaving a stale
+    one behind would score the doctor's previous draft.
+    """
     reports = load_reports()
     existing = reports.get(study_uid)
     if existing is None:
         raise HTTPException(404, f"No stored report for {study_uid}; use POST.")
 
-    existing.update(text=body.text, author=body.author, updated_at=now())
+    english, language = to_english(body.text)
+    existing.update(text=body.text, author=body.author, updated_at=now(),
+                    language=language, report_en=english)
     save_reports(reports)
     return existing
 

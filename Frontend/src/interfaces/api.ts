@@ -265,20 +265,48 @@ export interface UploadSequenceResponse {
   files: string[];
 }
 
-/** A user-written report stored by the backend (NOT a dataset report). */
+/**
+ * A user-written report stored by the backend (NOT a dataset report).
+ *
+ * `report_en` and `language` are filled by the server when the report is
+ * saved — everything downstream of a report is English-only, and translating
+ * on every read would put a call to Google in front of every score. They are
+ * optional because a record stored before that existed has neither; read the
+ * English through `englishReport` rather than the field.
+ */
 export interface StoredReportRecord {
   study_uid: string;
   text: string;
   author: string;
   created_at: string;
   updated_at: string;
+  /** Detected language of `text`, or "unknown" when nothing could tell. */
+  language?: string;
+  /** `text` rendered into English — what the report model actually reads. */
+  report_en?: string;
 }
 
-/** `GET /view/{study_uid}/information` */
+/**
+ * `GET /view/{study_uid}/information` — a study and everything written about it.
+ *
+ * A superset of `GET /studies/{uid}`, and the reason the study page reads this
+ * one instead: the two reports it also carries are what decide which models can
+ * run. `report` is the dataset's radiologist; `my_report` is the doctor's,
+ * written in this app. An uploaded study has neither until the doctor writes
+ * one, which is exactly the state the page has to render.
+ *
+ * The upload fields are spread through from the stored record, so they are
+ * present for uploads and absent for corpus studies.
+ */
 export interface StudyInformation extends StudyDetail {
   report: ReportResponse | null;
   pilkwang_labels: Record<string, LabelAssessment> | null;
   my_report: StoredReportRecord | null;
+  /** "upload" for studies added through the app; absent on corpus studies. */
+  source?: "upload" | "dataset";
+  /** The image model's prefill, written at upload time. Never ground truth. */
+  predicted_labels?: Record<string, number> | null;
+  label_model?: string | null;
 }
 
 /** `GET /view/{study_uid}/3d_image_sequence` - raw mesh for three.js/plotly. */
