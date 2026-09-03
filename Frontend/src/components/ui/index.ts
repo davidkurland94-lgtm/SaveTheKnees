@@ -4,4 +4,3 @@ export { Button } from "./Button";
 export { EmptyState, ErrorState, Loading, Spinner } from "./Feedback";
 export { Icon, type IconName } from "./Icon";
 export { NavBar } from "./NavBar";
-export { ProbabilityBar } from "./ProbabilityBar";

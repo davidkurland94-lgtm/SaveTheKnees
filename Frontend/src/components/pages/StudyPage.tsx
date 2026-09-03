@@ -1,34 +1,35 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 
 import {
   getSeriesInstances,
+  getSeriesTensor,
   getStudyInformation,
   predictStudy,
   seriesInstanceUrl,
-  view2dSheet,
 } from "@/api";
 import type {
   GoldenLabels,
   ModelName,
+  ModelVolume,
   PatientIdentity,
   Plane,
   Series,
   StoredReportRecord,
   StudyInformation,
   StudyPredictionResponse,
-  ViewerSlice,
   ViewerStack,
 } from "@/interfaces";
+import type { AsyncState } from "@/lib";
 import {
-  closeSlices,
   cn,
   createPromiseCache,
+  groupBySeverity,
   joinParts,
+  npyToVolume,
   patientOf,
   paths,
   pluralize,
-  splitContactSheet,
   toFindings,
   useAsync,
   wadouriImageId,
@@ -36,9 +37,9 @@ import {
 import { Avatar, Chip, ErrorState, GoldenBadge, Icon, Loading, NavBar } from "@/components/ui";
 import ReportPanel from "@/components/studies/ReportPanel";
 import SeriesList from "@/components/studies/SeriesList";
-import Dicom2DViewer from "@/components/viewer/Dicom2DViewer";
 import Dicom3DViewer from "@/components/viewer/Dicom3DViewer";
-import FindingList from "@/components/viewer/FindingList";
+import DicomMprViewer from "@/components/viewer/DicomMprViewer";
+import FindingList, { AttentionFlag } from "@/components/viewer/FindingList";
 
 /**
  * The two models this page offers, in the order the pipeline produces them.
@@ -187,15 +188,13 @@ export function StudyPage() {
           )}
         </aside>
 
-        {/* The wide column: both viewers, with the written report beneath them. */}
+        {/* The wide column: the viewer, with the written report beneath it. */}
         <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3">
-          <div className="flex min-h-0 flex-1 flex-col gap-3 xl:flex-row">
-            <SeriesViewers
-              studyUid={studyUid}
-              series={study.data?.series ?? []}
-              loading={study.loading}
-            />
-          </div>
+          <SeriesViewers
+            studyUid={studyUid}
+            series={study.data?.series ?? []}
+            loading={study.loading}
+          />
           {/* Always offered, never conditional on a report existing: on an
               uploaded study this empty box IS the next step, and a panel that
               only appears once there is something in it can never be the place
@@ -326,11 +325,32 @@ function SeriesPanel({
 }
 
 /**
- * One column of the sheet per request: `columns: 1` makes the tile size exactly
- * the sheet width and the slice count exactly `height / width`, so nothing has
- * to be assumed about how many slices came back.
+ * What the right-hand panel is showing.
+ *
+ * Two answers to two different questions, which is why they are a switch rather
+ * than two panels. "Reference" is the study's own DICOM, where the geometry
+ * survives — the only place a length is in millimetres and a point marked in
+ * one plane can be found in the others. "Volume" is the model's input rendered
+ * whole, which is what the scores in the rail were actually computed from.
+ *
+ * Reference leads, and is the default. It is the study as the scanner wrote it,
+ * which is what a doctor opens a study to look at; the model's view of it is
+ * the second question, asked once the first has been answered.
+ *
+ * Neither has to be waited for, because neither is fetched on demand — see the
+ * two requests in `SeriesViewers`, which both start as soon as the series is
+ * known, whichever panel is on screen.
  */
-const SHEET_COLUMNS = 1;
+const PANEL_VIEWS = [
+  {
+    id: "reference",
+    label: "Reference",
+    hint: "The study's own DICOM: three planes, measurable",
+  },
+  { id: "volume", label: "Volume", hint: "The model's input, rendered whole" },
+] as const;
+
+type PanelView = (typeof PANEL_VIEWS)[number]["id"];
 
 /** "Sagittal" on its own, but "Sagittal 1" / "Sagittal 2" when a plane repeats. */
 function planeLabels(series: Series[]): string[] {
@@ -354,19 +374,32 @@ function describeSeries(entry: Series): string {
 }
 
 /**
- * Owns what the two viewers draw — they are UI only, so the fetching happens
- * here. Each viewer wants the series in a different form, so there are two
- * requests per series, both for the selected one only.
+ * A fetched value, but only while it still belongs to the series on screen.
  *
- * `Dicom2DViewer` gets pixels: `/view/{uid}/2d_image_sequence` returns the 24
- * slices the model sees as one contact sheet, fetched here and cut back apart.
- * The server rebuilds each sheet from raw DICOM and that is slow, so sheets
- * already seen are kept and flipping between tabs is instant.
+ * `useAsync` holds its last result through the next request, which is what
+ * makes an already-seen tab flip back instantly — and is wrong the moment the
+ * tabs disagree. Without this the previous series' pixels are painted under the
+ * new tab's name until the new ones land, and the 3D viewer, which keys its
+ * GPU-side volume by series UID, would cache them there for good.
+ */
+function forSeries<T>(
+  state: AsyncState<{ seriesUid: string; value: T } | null>,
+  seriesUid: string | null,
+): T | null {
+  return state.data && state.data.seriesUid === seriesUid ? state.data.value : null;
+}
+
+/**
+ * Owns what the viewer draws — it is UI only, so the fetching happens here.
  *
- * `Dicom3DViewer` gets image IDs: `/studies/{uid}/series/{uid}/instances` lists
- * the raw DICOM files in scan order, and Cornerstone streams the bytes behind
- * them itself. Only the list is fetched here — the pixels never pass through
- * this component.
+ * One request per series, for the selected series and the chosen panel only.
+ * `Dicom3DViewer` reads the model's own input from
+ * `/studies/{uid}/series/{uid}/tensor`, a float32 `.npy`; `DicomMprViewer`
+ * reads the study's DICOM file names from `.../instances` and lets Cornerstone
+ * stream the pixels. Neither is fetched for a panel that is not on screen.
+ *
+ * The server rebuilds both from raw DICOM on every request and that is slow, so
+ * each is kept once seen and flipping back to a series is instant.
  */
 function SeriesViewers({
   studyUid,
@@ -379,52 +412,56 @@ function SeriesViewers({
 }) {
   const available = series.filter((entry) => entry.available);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [panel, setPanel] = useState<PanelView>("reference");
   // Falls back to the first series until one is picked, and again if the page
   // swaps to a study that does not have the previously selected series.
   const active =
     available.find((entry) => entry.series_uid === selectedId) ?? available[0] ?? null;
   const activeId = active?.series_uid ?? null;
 
-  const cache = useRef(new Map<string, ViewerSlice[]>());
+  // About 4.6 MB of float32 per series, held for the tab switch: the server
+  // rebuilds the tensor from raw DICOM on every request, and the volume the 3D
+  // viewer keeps on the GPU is keyed by series too, so re-fetching one already
+  // uploaded would be paid for and then thrown away.
+  const volumes = useRef(new Map<string, ModelVolume>());
 
-  const slices = useAsync(
+  // Deliberately ungated by `panel`: the tensor is fetched even while the
+  // reference view is the one on screen, so that switching to the volume is a
+  // render rather than a wait. It is the slow half of this page — the server
+  // rebuilds it from raw DICOM, a couple of seconds before a byte is sent — and
+  // there is nothing to gain by not having started.
+  const tensors = useAsync(
     async (signal) => {
-      if (!activeId) return [];
-      const cached = cache.current.get(activeId);
-      if (cached) return cached;
+      if (!activeId) return null;
+      const cached = volumes.current.get(activeId);
+      if (cached) return { seriesUid: activeId, value: cached };
 
-      const sheet = await view2dSheet(
-        studyUid,
-        { seriesUid: activeId, columns: SHEET_COLUMNS },
-        signal,
-      );
-      const cut = await splitContactSheet(sheet, SHEET_COLUMNS);
-      cache.current.set(activeId, cut);
-      return cut;
+      const npy = await getSeriesTensor(studyUid, activeId, signal);
+      const built = npyToVolume(await npy.arrayBuffer());
+      volumes.current.set(activeId, built);
+      return { seriesUid: activeId, value: built };
     },
     [studyUid, activeId],
   );
 
-  // Cheap next to the sheet — a list of file names — but still one request per
-  // series, so it is fetched for the selected one only, like the sheet is.
-  const imageIds = useAsync(
+  // The list of file names, which is cheap; the pixels behind them are streamed
+  // by Cornerstone and cached there. Gated on the panel only so that a reader
+  // who has moved to the volume does not re-list on the way back and forth —
+  // the reference view being the default, this fetches on load either way.
+  const instances = useAsync(
     async (signal) => {
-      if (!activeId) return [];
-      const { instances } = await getSeriesInstances(studyUid, activeId, signal);
-      return instances.map((name) => wadouriImageId(seriesInstanceUrl(studyUid, activeId, name)));
+      if (!activeId || panel !== "reference") return null;
+      const { instances: names } = await getSeriesInstances(studyUid, activeId, signal);
+      return {
+        seriesUid: activeId,
+        value: names.map((name) => wadouriImageId(seriesInstanceUrl(studyUid, activeId, name))),
+      };
     },
-    [studyUid, activeId],
+    [studyUid, activeId, panel],
   );
 
-  // ImageBitmaps hold native memory the GC is in no hurry to reclaim, and a
-  // five-series study caches 120 of them.
-  useEffect(() => {
-    const held = cache.current;
-    return () => {
-      for (const entry of held.values()) closeSlices(entry);
-      held.clear();
-    };
-  }, []);
+  const volume = forSeries(tensors, activeId) ?? undefined;
+  const imageIds = forSeries(instances, activeId) ?? [];
 
   const labels = planeLabels(available);
   const stacks: ViewerStack[] = available.map((entry, position) => ({
@@ -434,8 +471,8 @@ function SeriesViewers({
     description: describeSeries(entry),
     // Only the selected series carries data; the rest are tabs waiting to be
     // clicked, which is what keeps the page to one request at a time per view.
-    slices: entry.series_uid === activeId ? (slices.data ?? []) : [],
-    imageIds: entry.series_uid === activeId ? (imageIds.data ?? []) : [],
+    volume: entry.series_uid === activeId ? volume : undefined,
+    imageIds: entry.series_uid === activeId ? imageIds : [],
   }));
 
   // The stacks are empty for several different reasons, and saying which one is
@@ -454,24 +491,32 @@ function SeriesViewers({
     stacks,
     stackId: activeId ?? undefined,
     onStackChange: setSelectedId,
-    className: "min-h-0 min-w-0 flex-1",
   };
 
-  return (
-    <>
-      <Dicom2DViewer
-        {...shared}
-        emptyLabel={emptyReason(
-          slices.loading,
-          slices.error,
-          "Building the contact sheet on the server…",
-        )}
-      />
-      <Dicom3DViewer
-        {...shared}
-        emptyLabel={emptyReason(imageIds.loading, imageIds.error, "Listing the DICOM slices…")}
-      />
-    </>
+  const views = {
+    options: PANEL_VIEWS,
+    active: panel,
+    onSelect: (id: string) => setPanel(id as PanelView),
+  };
+
+  return panel === "reference" ? (
+    <DicomMprViewer
+      {...shared}
+      views={views}
+      className="min-h-0 min-w-0 flex-1"
+      emptyLabel={emptyReason(
+        instances.loading,
+        instances.error,
+        "Listing the study's DICOM slices…",
+      )}
+    />
+  ) : (
+    <Dicom3DViewer
+      {...shared}
+      views={views}
+      className="min-h-0 min-w-0 flex-1"
+      emptyLabel={emptyReason(tensors.loading, tensors.error, "Downloading the model's tensor…")}
+    />
   );
 }
 
@@ -512,6 +557,13 @@ function ModelTab({
     () => cachedPrediction(key, () => predictStudy(studyUid, model)),
     [key],
   );
+
+  // Grouped once here rather than inside the list: the flagged band is lifted
+  // out and pinned above the scroll area, so the two consumers need the same
+  // split and must not disagree about it.
+  const groups = prediction.data
+    ? groupBySeverity(toFindings(prediction.data.predictions, { truth, sortByProbability: true }))
+    : null;
 
   const active = MODELS.find((entry) => entry.id === model) ?? MODELS[0];
   // An uploaded study missing a plane is scored by whatever the server could
@@ -558,6 +610,11 @@ function ModelTab({
         <p className="text-xs text-muted-foreground">{active.hint}</p>
       </div>
 
+      {/* Above everything the panel has to say about this study, and outside the
+          scroll area, because a flag a reader has to scroll to find is not a
+          flag. */}
+      {groups && <AttentionFlag findings={groups.moderate} />}
+
       {!hasReport && (
         <p className="shrink-0 rounded-xl border border-dashed border-border px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
           Images only so far. The report model has nothing to read until a report
@@ -576,11 +633,11 @@ function ModelTab({
           <Loading label={`Running the ${model} model…`} />
         ) : prediction.error ? (
           <ErrorState message={prediction.error} onRetry={prediction.reload} />
-        ) : prediction.data ? (
+        ) : groups ? (
           <div className="rounded-2xl border border-border p-5">
             <FindingList
-              findings={toFindings(prediction.data.predictions, { truth, sortByProbability: true })}
-              note={truth ? "Green notches mark the hand-labelled positives." : undefined}
+              groups={groups}
+              note={truth ? "Hand-labelled ground truth is shown beside each finding." : undefined}
             />
           </div>
         ) : null}

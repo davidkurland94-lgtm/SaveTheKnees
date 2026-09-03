@@ -3,7 +3,7 @@
 import { LABEL_NAMES } from "@/interfaces";
 import type { Finding, GoldenLabels, LabelScores, Severity, Verdict } from "@/interfaces";
 
-/** Probability bands used for colour and the severity chip. */
+/** Probability bands. Unchanged; what they are *called* is what changed. */
 const HIGH_THRESHOLD = 0.7;
 const MODERATE_THRESHOLD = 0.4;
 
@@ -13,17 +13,38 @@ export function severityOf(probability: number): Severity {
   return "low";
 }
 
+/**
+ * What each band means to the person reading it, which is not what it means to
+ * the model.
+ *
+ * The panel used to print the probability and leave the reader to do this
+ * translation in their head, every finding, every study. It is the same
+ * translation every time and the model is better placed to make it, so it makes
+ * it here instead. A number also implies a precision the model has not earned:
+ * 0.62 and 0.68 are not a distinction anyone should act on.
+ *
+ * The middle band is the important one, and it is not "a middling chance of
+ * injury". It is the model declining to answer — and that is precisely the case
+ * that needs a human, because the other two it has already answered.
+ */
 export const SEVERITY_LABEL: Record<Severity, string> = {
-  high: "High",
-  moderate: "Moderate",
-  low: "Low",
+  high: "Injured",
+  moderate: "Needs review",
+  low: "Healthy",
 };
 
-export const SEVERITY_COLOR: Record<Severity, string> = {
-  high: "#ef4444",
-  moderate: "#f59e0b",
-  low: "#a78bfa",
-};
+/**
+ * Splits findings into the three bands, each keeping the order it came in.
+ *
+ * The panel reads them out of order — flagged first, whatever the model thought
+ * of the rest — so the grouping has to happen before the rendering, not inside
+ * a sort.
+ */
+export function groupBySeverity(findings: Finding[]): Record<Severity, Finding[]> {
+  const groups: Record<Severity, Finding[]> = { high: [], moderate: [], low: [] };
+  for (const finding of findings) groups[finding.severity].push(finding);
+  return groups;
+}
 
 /** `GET /studies/{uid}/labels/{label}` accepts these slugs as well as exact names. */
 export function labelSlug(label: string): string {

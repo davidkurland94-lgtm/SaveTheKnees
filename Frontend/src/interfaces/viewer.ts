@@ -1,28 +1,12 @@
 /**
  * Types the DICOM viewers consume.
  *
- * The viewers are pure UI: whoever renders them (a page) fetches by study UID,
- * decodes, and hands the pixels down. Nothing in `components/viewer` talks to
- * the API, so the same components serve a stored study, an upload, or a fixture.
+ * The viewers are pure UI: whoever renders them (a page) fetches by study UID
+ * and hands the pixels down. Nothing in `components/viewer` talks to the API,
+ * so the same components serve a stored study, an upload, or a fixture.
  */
 
 import type { Plane } from "./api";
-
-/**
- * Anything a viewer can paint. `ImageData` is what `lib/dicom.ts` produces for
- * an uploaded series; the image/bitmap/canvas variants let a page feed slices
- * carved out of a server-rendered contact sheet instead.
- */
-export type SliceImage = ImageData | ImageBitmap | HTMLImageElement | HTMLCanvasElement;
-
-/** One slice of a stack, already decoded. */
-export interface ViewerSlice {
-  image: SliceImage;
-  /** Stable React key; falls back to the position in the stack. */
-  id?: string;
-  /** Overlay caption, e.g. "Slice 12". */
-  label?: string;
-}
 
 /**
  * One acquisition run — the unit both viewers show at a time. A study usually
@@ -32,7 +16,6 @@ export interface ViewerSlice {
 export interface ViewerStack {
   /** Unique within the array; the series UID is the natural choice. */
   id: string;
-  slices: ViewerSlice[];
   /** Acquisition plane, when the page knows it. Badges the stage. */
   plane?: Plane;
   /**
@@ -44,20 +27,48 @@ export interface ViewerStack {
   description?: string;
   /**
    * `(slice, row, column)` spacing in millimetres, exactly as
-   * `GET /view/{uid}/3d_image_sequence` reports it.
+   * `GET /view/{uid}/3d_image_sequence` reports it. Omit it and the 3D viewer
+   * falls back to a ratio that keeps the volume from rendering flat — see
+   * `buildModelVolume`.
    */
   spacingMm?: [number, number, number];
   /**
-   * Cornerstone image IDs for the raw DICOM slices, in scan order — what
-   * `Dicom3DViewer` builds its volume from.
+   * The model's own input tensor — what `Dicom3DViewer` builds its volume from.
    *
-   * Separate from `slices` because the two viewers want different things from
-   * the same series. `slices` is the model's view: 24 tiles, 224 square,
-   * already windowed, no geometry. Cornerstone wants the files, so it can read
-   * the real millimetres out of the headers and reconstruct a volume — which is
-   * the whole reason it can reslice and volume-render where a stack of PNGs
-   * could only be leafed through. The page still does the fetching (of the
-   * *list*); the loader behind these IDs streams the pixels itself.
+   * The whole `(24, 224, 224)` block rather than a slice at a time, because a
+   * volume is what the viewer renders. It comes out of `sequence_to_tensor` on
+   * the server, which is the same function that feeds the network, so what is
+   * on screen is what was scored.
+   */
+  volume?: ModelVolume;
+  /**
+   * Cornerstone image IDs for the study's own DICOM files, in scan order —
+   * what `DicomMprViewer` builds its volume from.
+   *
+   * The counterpart to `volume`, and deliberately a different thing. `volume`
+   * is what the model was shown; this is what the scanner wrote, with the
+   * geometry still in the headers. That is what makes the reference view able
+   * to reslice into all three planes, tie a point in one of them to the same
+   * point in the others, and report a length in millimetres that is true.
+   *
+   * The page fetches the *list*; the loader behind these IDs streams the pixels
+   * itself. Expect it to be populated only while the reference view is open —
+   * a full series is a large download to make on the chance someone opens it.
    */
   imageIds?: string[];
+}
+
+/**
+ * One series as the model receives it: `(slices, rows, columns)` float32,
+ * values in [0, 1].
+ *
+ * Exactly the payload of `GET /studies/{uid}/series/{uid}/tensor`, minus the
+ * trailing channel axis. The preprocessing that produces it — 24 slices sampled
+ * across the series, resized to 224 square, one percentile window for the whole
+ * run — throws the acquisition geometry away, so a page that wants the volume
+ * drawn to scale has to supply `spacingMm` separately.
+ */
+export interface ModelVolume {
+  shape: [number, number, number];
+  data: Float32Array;
 }

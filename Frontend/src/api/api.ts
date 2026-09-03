@@ -270,8 +270,9 @@ export function get3dMesh(studyUid: string, options?: { seriesUid?: string; plan
   return requestJson<Mesh3DResponse>(`/view/${encode(studyUid)}/3d_image_sequence`, { query: { series_uid: options?.seriesUid, plane: options?.plane, downsample: options?.downsample }, signal });
 }
 
-/** `GET /view/{study_uid}/2d_image_sequence` - the contact sheet as a blob, for
- * splitting back into slices with `lib/splitContactSheet`. */
+/** `GET /view/{study_uid}/2d_image_sequence` - the 24 slices the model sees,
+ * tiled into one PNG. Nothing in the app calls it since the slice-at-a-time
+ * viewer was removed; it stays because this file mirrors every route. */
 export function view2dSheet(studyUid: string, options?: { seriesUid?: string; plane?: Plane; columns?: number }, signal?: AbortSignal): Promise<Blob> {
   return requestBlob(`/view/${encode(studyUid)}/2d_image_sequence`, { query: { series_uid: options?.seriesUid, plane: options?.plane, columns: options?.columns }, signal });
 }
