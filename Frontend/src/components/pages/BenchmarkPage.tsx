@@ -1,30 +1,41 @@
-import { useState } from "react";
 import { Link } from "react-router";
 
 import { getReportTable, getReportVerdicts } from "@/api";
-import type { ReportTableRow } from "@/interfaces";
+import type { ReportTableRow, VerdictRow } from "@/interfaces";
 import { cn, patientOf, paths, useAsync } from "@/lib";
 import { ErrorState, Icon, Loading, NavBar } from "@/components/ui";
 
-type Tab = "table" | "verdicts";
+/** The deck, in presentation order. Served straight out of `public/`. */
+const SLIDES = [
+  { title: "The project", file: "/Slide01-Project.svg" },
+  { title: "The data", file: "/Slide02-The Data.svg" },
+  { title: "The process", file: "/Slide03 - The Process.svg" },
+] as const;
 
-/** Column order for the AUC sheet, with readable headings. */
-const READERS: Array<{ key: keyof ReportTableRow; label: string }> = [
-  { key: "positives", label: "Pos" },
-  { key: "llm_v4_blend", label: "LLM v4" },
-  { key: "llm_full", label: "LLM full" },
-  { key: "llm_v2", label: "LLM v2" },
-  { key: "pilkwang_v2", label: "Pilkwang" },
-  { key: "image_model", label: "Image" },
-  { key: "image_multiplane", label: "Multiplane" },
-  { key: "report_model", label: "Report" },
-  { key: "report_bagged", label: "Report bag" },
-  { key: "fusion_model", label: "Fusion" },
-];
+/**
+ * The five readers we trained — the same tuple the backend calls `OUR_MODELS`
+ * in `models/evaluate_labels.py`. `GET /report/table` also scores the LLM
+ * extractions and pilkwang; those are other people's readers, and this page
+ * does not show them.
+ */
+const OUR_MODELS = [
+  { key: "image_model", label: "Image", note: "sagittal CNN, the serving checkpoint" },
+  { key: "image_multiplane", label: "Multiplane", note: "3-seed image ensemble" },
+  { key: "report_model", label: "Report", note: "TF-IDF + medical terms" },
+  { key: "report_bagged", label: "Report bagged", note: "5-fold × 2-seed bag" },
+  { key: "fusion_model", label: "Fusion", note: "images + report, jointly trained" },
+] as const satisfies ReadonlyArray<{ key: keyof ReportTableRow; label: string; note: string }>;
+
+/**
+ * How many verdict rows to pull in one go.
+ *
+ * `GET /report/verdicts` serves the corpus worst-first and caps `top` at 500,
+ * so the widest window the API offers is also the only way to reach the good
+ * end of the ranking: the best reports are its tail.
+ */
+const VERDICT_WINDOW = 500;
 
 export function BenchmarkPage() {
-  const [tab, setTab] = useState<Tab>("table");
-
   return (
     <div className="flex min-h-full flex-col bg-background">
       <NavBar homeTo={paths.home}>
@@ -37,181 +48,297 @@ export function BenchmarkPage() {
         </Link>
       </NavBar>
 
-      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-6 py-8">
-        <header>
-          <h1 className="text-2xl text-foreground">Benchmark</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Every reader scored against the 58 hand-labelled studies.
-          </p>
-        </header>
-
-        <nav className="flex w-fit gap-1 rounded-xl bg-muted p-1">
-          {(
-            [
-              { id: "table", label: "AUC by label" },
-              { id: "verdicts", label: "Report vs images" },
-            ] as Array<{ id: Tab; label: string }>
-          ).map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              onClick={() => setTab(entry.id)}
-              className={cn(
-                "rounded-lg px-4 py-2 text-xs font-semibold transition-all",
-                tab === entry.id
-                  ? "bg-white text-primary shadow-sm"
-                  : "text-muted-foreground hover:text-primary",
-              )}
-            >
-              {entry.label}
-            </button>
-          ))}
-        </nav>
-
-        {tab === "table" ? <AucTable /> : <VerdictsTable />}
+      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-12 px-6 py-8">
+        <SlideDeck />
+        <OurModels />
+        <BestAgreement />
       </div>
     </div>
   );
 }
 
-function AucTable() {
+/** A section heading with its one-line explanation. */
+function SectionHead({ title, blurb }: { title: string; blurb: string }) {
+  return (
+    <div>
+      <h2 className="text-lg text-foreground">{title}</h2>
+      <p className="mt-0.5 text-xs text-muted-foreground">{blurb}</p>
+    </div>
+  );
+}
+
+// ─── The deck ─────────────────────────────────────────────────────────────────
+
+/**
+ * The three presentation slides, stacked in order and scrolled through.
+ *
+ * Plain `<img>`, because they are vector: each slide carries its own
+ * 1280x832 viewBox, so the browser sizes it from the width and nothing here
+ * has to know the shape of a slide. They were PDFs first, and a PDF in a page
+ * is never an image — it is a viewer, with its own scrollbar and its own idea
+ * of how to fit the page.
+ */
+function SlideDeck() {
+  return (
+    <section className="flex flex-col gap-6">
+      {SLIDES.map((slide) => (
+        <img key={slide.file} src={encodeURI(slide.file)} alt={slide.title} className="w-full" />
+      ))}
+    </section>
+  );
+}
+
+// ─── Our five readers ─────────────────────────────────────────────────────────
+
+/** The AUC sheet with the other people's readers taken out. */
+function OurModels() {
   const table = useAsync((signal) => getReportTable(signal), []);
 
-  if (table.loading) return <Loading label="Loading the benchmark sheet…" />;
-  if (table.error) return <ErrorState message={table.error} onRetry={table.reload} />;
-
-  const rows = table.data?.rows ?? [];
-
   return (
-    <div className="overflow-x-auto rounded-2xl border border-border">
-      <table className="w-full min-w-[52rem] text-sm">
-        <thead>
-          <tr className="border-b border-border bg-card">
-            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Label
-            </th>
-            {READERS.map((reader) => (
-              <th
-                key={reader.key}
-                className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-              >
-                {reader.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => {
-            // Highlight the strongest reader on each row (the count column aside).
-            const best = Math.max(...READERS.slice(1).map((r) => Number(row[r.key])));
-            return (
-              <tr
-                key={row.label}
-                className={cn(
-                  "transition-colors hover:bg-card",
-                  index < rows.length - 1 && "border-b border-border-soft",
-                )}
-              >
-                <td className="px-4 py-2.5 font-medium text-foreground">{row.label}</td>
-                {READERS.map((reader) => {
-                  const value = row[reader.key];
-                  const isCount = reader.key === "positives";
-                  return (
-                    <td
-                      key={reader.key}
-                      className={cn(
-                        "px-3 py-2.5 text-right tabular-nums",
-                        isCount
-                          ? "text-muted-foreground"
-                          : value === best
-                            ? "font-semibold text-primary"
-                            : "text-foreground",
-                      )}
-                    >
-                      {/* The summary row carries a null count. */}
-                      {typeof value !== "number" ? "—" : isCount ? value : value.toFixed(3)}
-                    </td>
-                  );
-                })}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <section className="flex flex-col gap-3">
+      <SectionHead
+        title="Our models"
+        blurb="AUC on the 58 hand-labelled studies."
+      />
+
+      {table.loading ? (
+        <Loading label="Loading the benchmark sheet…" />
+      ) : table.error ? (
+        <ErrorState message={table.error} onRetry={table.reload} />
+      ) : (
+        <OurModelsBody rows={table.data?.rows ?? []} />
+      )}
+    </section>
   );
 }
 
-function VerdictsTable() {
-  const [top, setTop] = useState(20);
-  const verdicts = useAsync((signal) => getReportVerdicts(top, signal), [top]);
-
-  if (verdicts.loading) return <Loading label="Loading verdicts…" />;
-  if (verdicts.error) return <ErrorState message={verdicts.error} onRetry={verdicts.reload} />;
-
-  const rows = verdicts.data?.rows ?? [];
+function OurModelsBody({ rows }: { rows: ReportTableRow[] }) {
+  // The sheet's trailing summary row is the one with no positive count.
+  const mean = rows.find((row) => typeof row.positives !== "number");
+  const labels = rows.filter((row) => typeof row.positives === "number");
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <label htmlFor="verdict-top" className="text-xs text-muted-foreground">
-          Worst
-        </label>
-        <select
-          id="verdict-top"
-          value={top}
-          onChange={(event) => setTop(Number(event.target.value))}
-          className="rounded-lg border border-border bg-card px-2 py-1 text-xs text-foreground"
-        >
-          {[10, 20, 50, 100].map((value) => (
-            <option key={value} value={value}>
-              {value}
-            </option>
-          ))}
-        </select>
-        <span className="text-xs text-muted-foreground">reports first</span>
-      </div>
+    <div className="flex flex-col gap-4">
+      {mean && <MeanAuc mean={mean} />}
 
       <div className="overflow-x-auto rounded-2xl border border-border">
-        <table className="w-full min-w-[56rem] text-sm">
+        <table className="w-full min-w-[40rem] text-sm">
           <thead>
             <tr className="border-b border-border bg-card">
-              {["Study", "Report says", "Images say", "Missed", "Quality"].map((heading) => (
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Label
+              </th>
+              <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Pos
+              </th>
+              {OUR_MODELS.map((model) => (
                 <th
-                  key={heading}
-                  className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                  key={model.key}
+                  className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                 >
-                  {heading}
+                  {model.label}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => (
-              <tr
-                key={row.StudyInstanceUID}
-                className={cn(
-                  "align-top transition-colors hover:bg-card",
-                  index < rows.length - 1 && "border-b border-border-soft",
-                )}
-              >
-                <td className="px-4 py-3">
-                  <PatientCell uid={row.StudyInstanceUID} />
-                </td>
-                <td className="max-w-56 px-4 py-3 text-xs text-foreground">{row.report_says}</td>
-                <td className="max-w-56 px-4 py-3 text-xs text-muted-foreground">
-                  {row.images_say}
-                </td>
-                <td className="max-w-48 px-4 py-3 text-xs text-red-600">{row["missed?"]}</td>
-                <td className="px-4 py-3 text-xs tabular-nums text-foreground">
-                  {row.quality_score.toFixed(2)}
-                </td>
-              </tr>
+            {labels.map((row, index) => (
+              <OurModelsRow
+                key={row.label}
+                row={row}
+                last={index === labels.length - 1 && !mean}
+              />
             ))}
+            {mean && <OurModelsRow row={mean} last summary />}
           </tbody>
         </table>
       </div>
     </div>
+  );
+}
+
+function OurModelsRow({
+  row,
+  last,
+  summary,
+}: {
+  row: ReportTableRow;
+  last: boolean;
+  summary?: boolean;
+}) {
+  // Best of ours on this row — the other readers no longer compete for it.
+  const best = Math.max(...OUR_MODELS.map((model) => Number(row[model.key])));
+
+  return (
+    <tr
+      className={cn(
+        "transition-colors hover:bg-card",
+        !last && "border-b border-border-soft",
+        summary && "border-t-2 border-t-border bg-muted/60 font-semibold",
+      )}
+    >
+      <td className="px-4 py-2.5 font-medium text-foreground">{row.label}</td>
+      <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
+        {typeof row.positives === "number" ? row.positives : "—"}
+      </td>
+      {OUR_MODELS.map((model) => {
+        const value = Number(row[model.key]);
+        return (
+          <td
+            key={model.key}
+            className={cn(
+              "px-3 py-2.5 text-right tabular-nums",
+              value === best ? "font-semibold text-primary" : "text-foreground",
+            )}
+          >
+            {value.toFixed(3)}
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+/**
+ * Mean AUC per model, ranked — the headline of the sheet below it.
+ *
+ * One measure, one hue: the bars carry magnitude, so there is nothing for a
+ * second colour to mean. Each track is drawn full width with a hairline at the
+ * half, because 0.5 is not "half as good" but a coin toss, and a reader who
+ * cannot see where chance sits cannot read an AUC at all.
+ */
+function MeanAuc({ mean }: { mean: ReportTableRow }) {
+  const ranked = [...OUR_MODELS].sort((a, b) => Number(mean[b.key]) - Number(mean[a.key]));
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-sm text-foreground">Mean AUC across the twelve findings</h3>
+        <span className="text-xs text-muted-foreground">1.0 = perfect · 0.5 = chance</span>
+      </div>
+
+      <ul className="mt-4 flex flex-col gap-3">
+        {ranked.map((model) => {
+          const value = Number(mean[model.key]);
+          return (
+            <li
+              key={model.key}
+              className="grid grid-cols-[minmax(6rem,10rem)_1fr_3rem] items-center gap-3"
+            >
+              <div>
+                <p className="text-xs font-semibold text-foreground">{model.label}</p>
+                <p className="text-[10px] leading-tight text-subtle">{model.note}</p>
+              </div>
+              <div
+                className="relative h-4 rounded-r-sm bg-muted"
+                title={`${model.label}: mean AUC ${value.toFixed(3)}`}
+              >
+                <div
+                  className="h-full rounded-r-[4px] bg-primary"
+                  style={{ width: `${value * 100}%` }}
+                />
+                {/* Chance, drawn over the fill so it stays visible inside it. */}
+                <span className="absolute inset-y-[-4px] left-1/2 w-px bg-accent-soft" />
+              </div>
+              <span className="text-right text-xs font-semibold tabular-nums text-foreground">
+                {value.toFixed(3)}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// ─── Images vs the report ─────────────────────────────────────────────────────
+
+/** "ACL, Effusion" -> ["ACL", "Effusion"]; the sheet's "(nothing)" -> []. */
+function findings(cell: string): string[] {
+  return cell === "(nothing)" ? [] : cell.split(", ").filter(Boolean);
+}
+
+/** The findings both witnesses name — the agreement a good report is made of. */
+function agreed(row: VerdictRow): string[] {
+  const images = new Set(findings(row.images_say));
+  return findings(row.report_says).filter((finding) => images.has(finding));
+}
+
+/**
+ * The ten reports the images corroborate best.
+ *
+ * The score tops out at 1.00 (nothing the images read is missing from the
+ * report) and plenty of studies sit there, so the tie is broken on how much
+ * the two actually agree about: a report that names eight findings the images
+ * also read is a better witness than one where neither saw anything.
+ */
+function BestAgreement() {
+  const verdicts = useAsync((signal) => getReportVerdicts(VERDICT_WINDOW, signal), []);
+  const rows = [...(verdicts.data?.rows ?? [])]
+    .sort(
+      (a, b) =>
+        b.quality_score - a.quality_score || agreed(b).length - agreed(a).length,
+    )
+    .slice(0, 10);
+
+  return (
+    <section className="flex flex-col gap-3">
+      <SectionHead
+        title="Top 10 — images vs reports"
+        blurb="The best of the two witnesses: every finding the images read is already in the report."
+      />
+
+      {verdicts.loading ? (
+        <Loading label="Loading verdicts…" />
+      ) : verdicts.error ? (
+        <ErrorState message={verdicts.error} onRetry={verdicts.reload} />
+      ) : (
+        <div className="overflow-x-auto rounded-2xl border border-border">
+          <table className="w-full min-w-[56rem] text-sm">
+            <thead>
+              <tr className="border-b border-border bg-card">
+                {["#", "Study", "Report says", "Images say", "Both agree", "Quality"].map(
+                  (heading) => (
+                    <th
+                      key={heading}
+                      className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    >
+                      {heading}
+                    </th>
+                  ),
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => (
+                <tr
+                  key={row.StudyInstanceUID}
+                  className={cn(
+                    "align-top transition-colors hover:bg-card",
+                    index < rows.length - 1 && "border-b border-border-soft",
+                  )}
+                >
+                  <td className="px-4 py-3 text-xs tabular-nums text-subtle">{index + 1}</td>
+                  <td className="px-4 py-3">
+                    <PatientCell uid={row.StudyInstanceUID} />
+                  </td>
+                  <td className="max-w-56 px-4 py-3 text-xs text-foreground">{row.report_says}</td>
+                  <td className="max-w-56 px-4 py-3 text-xs text-muted-foreground">
+                    {row.images_say}
+                  </td>
+                  <td className="px-4 py-3 text-xs tabular-nums text-emerald-600">
+                    {agreed(row).length}
+                  </td>
+                  <td className="px-4 py-3 text-xs tabular-nums text-foreground">
+                    {row.quality_score.toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
