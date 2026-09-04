@@ -13,6 +13,14 @@ const SLIDES = [
 ] as const;
 
 /**
+ * The sign-off, held back to close the page.
+ *
+ * It is the deck's fourth slide, but it reads as an ending, so it belongs
+ * after the numbers rather than in front of them with the other three.
+ */
+const CLOSING_SLIDE = { title: "Thank you", file: "/Slide04 - ThankYou.svg" } as const;
+
+/**
  * The five readers we trained — the same tuple the backend calls `OUR_MODELS`
  * in `models/evaluate_labels.py`. `GET /report/table` also scores the LLM
  * extractions and pilkwang; those are other people's readers, and this page
@@ -67,6 +75,7 @@ export function BenchmarkPage() {
         <SlideDeck />
         <BestAgreement />
         <OurModels />
+        <ClosingSlide />
       </div>
     </div>
   );
@@ -99,6 +108,15 @@ function SlideDeck() {
       {SLIDES.map((slide) => (
         <img key={slide.file} src={encodeURI(slide.file)} alt={slide.title} className="w-full" />
       ))}
+    </section>
+  );
+}
+
+/** The closing slide, sized exactly like the deck's, but at the foot of the page. */
+function ClosingSlide() {
+  return (
+    <section className="py-8">
+      <img src={encodeURI(CLOSING_SLIDE.file)} alt={CLOSING_SLIDE.title} className="w-full" />
     </section>
   );
 }
