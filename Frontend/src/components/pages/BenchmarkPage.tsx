@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 
-import { getReportTable, getReportVerdicts } from "@/api";
+import { getReportTable, getReportVerdicts, getStudy } from "@/api";
 import type { ReportTableRow, VerdictRow } from "@/interfaces";
 import { cn, patientOf, paths, useAsync } from "@/lib";
 import { ErrorState, Icon, Loading, NavBar } from "@/components/ui";
@@ -35,6 +35,21 @@ const OUR_MODELS = [
  */
 const VERDICT_WINDOW = 500;
 
+/** How many studies the images-vs-reports section shows. */
+const TOP_N = 10;
+
+/**
+ * Availability probes to run at once, and how far down the ranking to look.
+ *
+ * A verdict row is scored from CSVs that cover the whole 4,407-study corpus,
+ * but only part of that corpus has its DICOM on any given deployment — so a
+ * row can rank top of the sheet and still open onto a study with nothing to
+ * show. There is no bulk "has images" route, so the only way to know is to ask
+ * per study; these two numbers keep that to a few batched rounds.
+ */
+const PROBE_BATCH = 12;
+const PROBE_DEPTH = 180;
+
 export function BenchmarkPage() {
   return (
     <div className="flex min-h-full flex-col bg-background">
@@ -50,8 +65,8 @@ export function BenchmarkPage() {
 
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-12 px-6 py-8">
         <SlideDeck />
-        <OurModels />
         <BestAgreement />
+        <OurModels />
       </div>
     </div>
   );
@@ -80,7 +95,7 @@ function SectionHead({ title, blurb }: { title: string; blurb: string }) {
  */
 function SlideDeck() {
   return (
-    <section className="flex flex-col gap-6">
+    <section className="flex flex-col gap-16 py-8">
       {SLIDES.map((slide) => (
         <img key={slide.file} src={encodeURI(slide.file)} alt={slide.title} className="w-full" />
       ))}
@@ -95,7 +110,7 @@ function OurModels() {
   const table = useAsync((signal) => getReportTable(signal), []);
 
   return (
-    <section className="flex flex-col gap-3">
+    <section className="flex flex-col gap-3 pt-8">
       <SectionHead
         title="Our models"
         blurb="AUC on the 58 hand-labelled studies."
@@ -113,7 +128,8 @@ function OurModels() {
 }
 
 function OurModelsBody({ rows }: { rows: ReportTableRow[] }) {
-  // The sheet's trailing summary row is the one with no positive count.
+  // The sheet's trailing summary row is the one the API sends with no positive
+  // count; the count itself is not a column here, only the tell.
   const mean = rows.find((row) => typeof row.positives !== "number");
   const labels = rows.filter((row) => typeof row.positives === "number");
 
@@ -127,9 +143,6 @@ function OurModelsBody({ rows }: { rows: ReportTableRow[] }) {
             <tr className="border-b border-border bg-card">
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Label
-              </th>
-              <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Pos
               </th>
               {OUR_MODELS.map((model) => (
                 <th
@@ -178,9 +191,6 @@ function OurModelsRow({
       )}
     >
       <td className="px-4 py-2.5 font-medium text-foreground">{row.label}</td>
-      <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
-        {typeof row.positives === "number" ? row.positives : "—"}
-      </td>
       {OUR_MODELS.map((model) => {
         const value = Number(row[model.key]);
         return (
@@ -258,40 +268,97 @@ function findings(cell: string): string[] {
   return cell === "(nothing)" ? [] : cell.split(", ").filter(Boolean);
 }
 
+/**
+ * Neither witness saw anything.
+ *
+ * A perfect score, and a true one — but a clean knee nobody wrote up is no
+ * evidence that the two readers agree, so it does not belong in a list whose
+ * whole point is showing them agreeing.
+ */
+function silent(row: VerdictRow): boolean {
+  return findings(row.report_says).length === 0 && findings(row.images_say).length === 0;
+}
+
 /** The findings both witnesses name — the agreement a good report is made of. */
 function agreed(row: VerdictRow): string[] {
   const images = new Set(findings(row.images_say));
   return findings(row.report_says).filter((finding) => images.has(finding));
 }
 
+/** Whether this deployment holds any of the study's images. */
+async function hasImages(uid: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    const study = await getStudy(uid, signal);
+    return study.series.some((entry) => entry.available);
+  } catch (cause) {
+    // An abort has to keep travelling, or the search below carries on firing
+    // requests for a section nobody is looking at any more. Anything else is
+    // a study we cannot describe, which is a study we cannot open.
+    if (signal.aborted) throw cause;
+    return false;
+  }
+}
+
 /**
- * The ten reports the images corroborate best.
+ * The best `want` rows whose study can actually be opened.
+ *
+ * Walks the ranking in order, probing a batch at a time and stopping as soon
+ * as enough have answered yes — so a deployment carrying the whole corpus pays
+ * for one round, and a partial one pays for a few.
+ */
+async function openable(
+  ranked: VerdictRow[],
+  want: number,
+  signal: AbortSignal,
+): Promise<VerdictRow[]> {
+  const kept: VerdictRow[] = [];
+  const pool = ranked.slice(0, PROBE_DEPTH);
+
+  for (let start = 0; start < pool.length && kept.length < want; start += PROBE_BATCH) {
+    const batch = pool.slice(start, start + PROBE_BATCH);
+    const answers = await Promise.all(
+      batch.map((row) => hasImages(row.StudyInstanceUID, signal)),
+    );
+    batch.forEach((row, index) => {
+      if (answers[index]) kept.push(row);
+    });
+  }
+
+  return kept.slice(0, want);
+}
+
+/**
+ * The ten reports the images corroborate best, of the studies this deployment
+ * can open.
  *
  * The score tops out at 1.00 (nothing the images read is missing from the
  * report) and plenty of studies sit there, so the tie is broken on how much
  * the two actually agree about: a report that names eight findings the images
- * also read is a better witness than one where neither saw anything.
+ * also read is a better witness than one that names two. Studies where neither
+ * witness saw anything score a perfect 1.00 on a technicality and are dropped.
  */
 function BestAgreement() {
-  const verdicts = useAsync((signal) => getReportVerdicts(VERDICT_WINDOW, signal), []);
-  const rows = [...(verdicts.data?.rows ?? [])]
-    .sort(
-      (a, b) =>
-        b.quality_score - a.quality_score || agreed(b).length - agreed(a).length,
-    )
-    .slice(0, 10);
+  const best = useAsync(async (signal) => {
+    const { rows } = await getReportVerdicts(VERDICT_WINDOW, signal);
+    const ranked = rows
+      .filter((row) => !silent(row))
+      .sort((a, b) => b.quality_score - a.quality_score || agreed(b).length - agreed(a).length);
+    return openable(ranked, TOP_N, signal);
+  }, []);
+
+  const rows = best.data ?? [];
 
   return (
     <section className="flex flex-col gap-3">
       <SectionHead
         title="Top 10 — images vs reports"
-        blurb="The best of the two witnesses: every finding the images read is already in the report."
+        blurb="The best of the two witnesses: every finding the images read is already in the report. Every row opens."
       />
 
-      {verdicts.loading ? (
-        <Loading label="Loading verdicts…" />
-      ) : verdicts.error ? (
-        <ErrorState message={verdicts.error} onRetry={verdicts.reload} />
+      {best.loading ? (
+        <Loading label="Finding the ten best…" />
+      ) : best.error ? (
+        <ErrorState message={best.error} onRetry={best.reload} />
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-border">
           <table className="w-full min-w-[56rem] text-sm">
@@ -337,6 +404,13 @@ function BestAgreement() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {!best.loading && !best.error && rows.length < TOP_N && (
+        <p className="text-xs text-muted-foreground">
+          Showing {rows.length}. The rest of the ranking points at studies whose images are not on
+          this deployment, so there would be nothing to open.
+        </p>
       )}
     </section>
   );
