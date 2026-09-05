@@ -74,12 +74,11 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_TAG}
       - --region=${_REGION}
       - --platform=managed
-      - --allow-unauthenticated
       - --memory=4Gi
       - --cpu=2
-      - --timeout=300
-      - --concurrency=8
-      - --max-instances=3
+      - --timeout=60
+      - --concurrency=4
+      - --max-instances=1
       - --add-volume=name=data,type=cloud-storage,bucket=${_DATA_BUCKET},readonly=true
       - --add-volume-mount=volume=data,mount-path=/mnt/data
       - --add-volume=name=models,type=cloud-storage,bucket=${_MODEL_BUCKET},readonly=true
